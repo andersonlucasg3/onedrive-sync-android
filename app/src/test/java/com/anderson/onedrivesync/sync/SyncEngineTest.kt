@@ -1,5 +1,6 @@
 package com.anderson.onedrivesync.sync
 
+import com.anderson.onedrivesync.db.Entry
 import com.anderson.onedrivesync.db.EntryState
 import com.anderson.onedrivesync.db.Pair
 import com.anderson.onedrivesync.db.PendingKind
@@ -629,6 +630,88 @@ class SyncEngineTest {
     }
 
     @Test
+    fun `upload resolves the parent folder from the index when the delta does not report it`() {
+        // The folder is untouched since the previous cycle: it is in the index but absent from the
+        // delta view, which is exactly what made every nested upload fail with v1.4.1.
+        val folderId = remote.addFolder("WhatsApp")
+        store.upsertEntry(folderEntry("WhatsApp", folderId))
+        File(root, "WhatsApp").mkdirs()
+        File(root, "WhatsApp/x.jpg").writeText("foto")
+        val plan = Plan(listOf(Action.Upload("WhatsApp/x.jpg", "WhatsApp")), emptyList(), emptyList())
+        remote.clearCalls()
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(0, stats.failed)
+        assertEquals(1, stats.done)
+        assertEquals(folderId, remote.calls.filterIsInstance<FakeRemoteApi.Call.Upload>().single().parentId)
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.CreateFolder })
+        assertEquals("foto", remote.textOf("WhatsApp/x.jpg"))
+    }
+
+    @Test
+    fun `upload creates the parent folder when it exists nowhere`() {
+        File(root, "Nova").mkdirs()
+        File(root, "Nova/x.txt").writeText("conteudo")
+        val plan = Plan(listOf(Action.Upload("Nova/x.txt", "Nova")), emptyList(), emptyList())
+        remote.clearCalls()
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(0, stats.failed)
+        val created = remote.calls.filterIsInstance<FakeRemoteApi.Call.CreateFolder>().single()
+        assertEquals(remote.rootId, created.parentId)
+        assertEquals("Nova", created.name)
+        val folderId = remote.idOf("Nova")
+        assertEquals(folderId, remote.calls.filterIsInstance<FakeRemoteApi.Call.Upload>().single().parentId)
+        assertEquals(folderId, store.entriesOf(PAIR).single { it.relPath == "Nova" }.remoteId)
+        assertEquals("conteudo", remote.textOf("Nova/x.txt"))
+    }
+
+    @Test
+    fun `an upload whose parent cannot be created fails naming the folder`() {
+        File(root, "Nova").mkdirs()
+        File(root, "Nova/x.txt").writeText("conteudo")
+        remote.failNextCreateFolder()
+        val plan = Plan(listOf(Action.Upload("Nova/x.txt", "Nova")), emptyList(), emptyList())
+        remote.clearCalls()
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(1, stats.failed)
+        assertEquals(0, stats.done)
+        assertFalse(remote.has("Nova/x.txt"))
+        assertTrue(store.logs.any { it.contains("criar pasta remota 'Nova' falhou") })
+        assertTrue(
+            store.logs.any { it.contains("enviar Nova/x.txt falhou") && it.contains("pasta remota desconhecida: 'Nova'") },
+        )
+    }
+
+    @Test
+    fun `remote move creates a missing target folder before moving`() {
+        remote.addFile("a.txt", "conteudo")
+        runSync()
+        val indexed = store.entriesOf(PAIR).single { it.relPath == "a.txt" }
+        val remoteId = checkNotNull(indexed.remoteId)
+        val plan = Plan(listOf(Action.MoveRemote("a.txt", "Pasta/b.txt", remoteId)), emptyList(), emptyList())
+        remote.clearCalls()
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(0, stats.failed)
+        assertEquals(remote.idOf("Pasta"), remote.calls.filterIsInstance<FakeRemoteApi.Call.Move>().single().parentId)
+        assertTrue(remote.has("Pasta/b.txt"))
+    }
+
+    @Test
     fun `move local whose source was already renamed only rewrites the index`() {
         remote.addFile("a.txt", "conteudo")
         runSync()
@@ -818,6 +901,24 @@ class SyncEngineTest {
         enabled = true,
         createdAt = 0,
         lastSyncAt = null,
+    )
+
+    /** A remote folder entry as the index keeps it between cycles, with no local counterpart. */
+    private fun folderEntry(relPath: String, remoteId: String): Entry = Entry(
+        id = 0,
+        pairId = PAIR,
+        relPath = relPath,
+        parentRel = null,
+        name = relPath,
+        isDir = true,
+        size = 0,
+        mtimeMs = 0,
+        localHash = null,
+        remoteId = remoteId,
+        remoteEtag = null,
+        remoteHash = null,
+        syncedAt = NOW,
+        state = EntryState.SYNCED,
     )
 
     private fun FakeRemoteApi.downloads(): List<String> =

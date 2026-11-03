@@ -41,10 +41,16 @@ class Executor(
         view: PairView,
         onProgress: (String, Int, Int) -> Unit,
     ): ExecStats {
-        // relPath of a remote folder -> its id; "" is the pair root. Seeded with the folders the
-        // delta already knows so a nested upload/folder can resolve its parent.
+        // relPath of a remote folder -> its id; "" is the pair root. The index goes first: a folder
+        // untouched since the previous cycle does not come back in the delta, so its id survives
+        // only there. The view then wins over the index for every folder the delta did report.
         val remoteIds = HashMap<String, String>()
         remoteIds[""] = pair.remoteId
+        for (entry in store.entries(pair.id)) {
+            val remoteId = entry.remoteId ?: continue
+            if (!entry.isDir) continue
+            remoteIds.putIfAbsent(entry.relPath, remoteId)
+        }
         for ((relPath, item) in view.items) if (item.isDir) remoteIds[relPath] = item.id
 
         val actions = plan.actions.sortedBy { it.order() }
@@ -88,12 +94,55 @@ class Executor(
         when (action) {
             is Action.CreateFolderRemote -> createFolderRemote(action, pair, view, remoteIds)
             is Action.CreateFolderLocal -> createFolderLocal(action, pair, remoteIds)
-            is Action.MoveRemote -> moveRemote(action, pair, remoteIds)
+            is Action.MoveRemote -> moveRemote(action, pair, view, remoteIds)
             is Action.MoveLocal -> moveLocal(action, pair)
             is Action.Download -> download(action, pair, view)
-            is Action.Upload -> upload(action, pair, remoteIds)
+            is Action.Upload -> upload(action, pair, view, remoteIds)
             is Action.DeleteLocal, is Action.DeleteRemote -> Unit // see class doc: pending queue only
         }
+    }
+
+    /**
+     * Resolves [relPath] to the id of its remote folder, creating the missing segments in order.
+     *
+     * A folder can be missing from [remoteIds] for two reasons: the delta did not report it (fixed
+     * by seeding the index in [execute]) or it genuinely does not exist remotely. The second case
+     * used to surface as "pasta remota desconhecida" even though nothing had been tried; here the
+     * folder is created under its parent and registered for the rest of the pass.
+     *
+     * Returns null when a folder could not be created; the creation failure is logged with the
+     * folder path, and the caller fails the action instead of uploading into an unknown parent.
+     */
+    private suspend fun ensureRemoteFolder(
+        relPath: String,
+        parentOf: (String) -> String,
+        remoteIds: MutableMap<String, String>,
+        pair: Pair,
+        view: PairView,
+    ): String? {
+        if (relPath.isEmpty()) return remoteIds[""]
+        var current = ""
+        for (segment in relPath.split('/')) {
+            current = if (current.isEmpty()) segment else "$current/$segment"
+            if (remoteIds.containsKey(current)) continue
+            val parentId = remoteIds[parentOf(current)] ?: return null
+            val item = try {
+                remote.createFolder(parentId, nameOf(current))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Same race as createFolderRemote: the folder exists but the index lost its id.
+                val existing = if (e is GraphException && e.isAlreadyExists()) view.items[current] else null
+                if (existing == null) {
+                    log("criar pasta remota '$current' falhou: ${e.message}")
+                    return null
+                }
+                existing
+            }
+            remoteIds[current] = item.id
+            store.upsertEntry(folderEntry(pair, current, item.id))
+        }
+        return remoteIds[relPath]
     }
 
     private suspend fun createFolderRemote(
@@ -122,9 +171,15 @@ class Executor(
         store.upsertEntry(folderEntry(pair, action.relPath, remoteId))
     }
 
-    private suspend fun moveRemote(action: Action.MoveRemote, pair: Pair, remoteIds: MutableMap<String, String>) {
+    private suspend fun moveRemote(
+        action: Action.MoveRemote,
+        pair: Pair,
+        view: PairView,
+        remoteIds: MutableMap<String, String>,
+    ) {
         val parentRel = parentOf(action.to)
-        val parentId = checkNotNull(remoteIds[parentRel]) { "pasta remota desconhecida: '$parentRel'" }
+        val parentId = ensureRemoteFolder(parentRel, ::parentOf, remoteIds, pair, view)
+            ?: throw IllegalStateException("pasta remota desconhecida: '$parentRel'")
         remote.move(action.remoteId, parentId, nameOf(action.to))
         remoteIds[action.to] = remoteIds.remove(action.from) ?: action.remoteId
         rewriteEntries(pair, action.from, action.to)
@@ -195,10 +250,16 @@ class Executor(
         )
     }
 
-    private suspend fun upload(action: Action.Upload, pair: Pair, remoteIds: Map<String, String>) {
+    private suspend fun upload(
+        action: Action.Upload,
+        pair: Pair,
+        view: PairView,
+        remoteIds: MutableMap<String, String>,
+    ) {
         val relPath = action.relPath
         val parentRel = action.remoteParentRel ?: parentOf(relPath)
-        val parentId = checkNotNull(remoteIds[parentRel]) { "pasta remota desconhecida: '$parentRel'" }
+        val parentId = ensureRemoteFolder(parentRel, ::parentOf, remoteIds, pair, view)
+            ?: throw IllegalStateException("pasta remota desconhecida: '$parentRel'")
         val file = local.file(relPath)
         val item = remote.upload(parentId, nameOf(relPath), file) { _, _ -> }
         val mtime = file.lastModified()

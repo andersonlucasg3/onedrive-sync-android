@@ -101,6 +101,56 @@ fun statusDetail(status: SyncStatus, now: Long): String = when (status) {
 }
 
 /**
+ * The operation the executor is running right now, on one line:
+ * "WhatsApp Images · enviando WhatsApp/x.jpg · 161/1.962".
+ *
+ * The executor label already carries the verb in the infinitive ("enviar x"), so it is normalized
+ * to the gerund instead of repeating a prefix. Only file operations get a line: while the cycle is
+ * reading the drive, scanning, hashing or planning there is no operation in progress and the panel
+ * shows nothing (null), so the line takes no space outside [SyncStatus.Running].
+ */
+fun activeOperationText(status: SyncStatus): String? {
+    if (status !is SyncStatus.Running) return null
+    val operation = activeOperation(status.step.trim()) ?: return null
+    val counter =
+        if (status.total > 0) "${formatCount(status.done)}/${formatCount(status.total)}" else null
+    val pair = status.pairName?.takeIf { it.isNotBlank() }
+    return listOfNotNull(pair, operation, counter).joinToString(" · ")
+}
+
+/** "enviando WhatsApp/x.jpg": the executor verb changed to the gerund, path kept verbatim. */
+private fun activeOperation(step: String): String? {
+    for ((infinitive, gerund) in ACTIVE_OPERATION_VERBS) {
+        val rest = when {
+            step == infinitive -> ""
+            step.startsWith("$infinitive ") -> step.removePrefix(infinitive)
+            else -> continue
+        }
+        return gerund + rest
+    }
+    return null
+}
+
+/** Verbs the executor emits during the action phase, and the form the panel shows. */
+private val ACTIVE_OPERATION_VERBS = listOf(
+    "enviar" to "enviando",
+    "baixar" to "baixando",
+    "mover" to "movendo",
+)
+
+/** "1.962": the app is pt-BR, so thousands are grouped with a dot, as the panel example shows. */
+private fun formatCount(value: Int): String {
+    val digits = value.coerceAtLeast(0).toString()
+    if (digits.length <= 3) return digits
+    val text = StringBuilder(digits.length + digits.length / 3)
+    for ((index, digit) in digits.withIndex()) {
+        if (index > 0 && (digits.length - index) % 3 == 0) text.append('.')
+        text.append(digit)
+    }
+    return text.toString()
+}
+
+/**
  * Card line for one pair: "há 5 min · 12 arquivos". With a persisted result the count is what that
  * cycle moved ("Nenhuma alteração" when it moved nothing); a pair that synced before results were
  * stored only has the timestamp. Null when the pair never synced.

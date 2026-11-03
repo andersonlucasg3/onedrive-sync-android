@@ -168,13 +168,49 @@ class SyncStatusTest {
         assertEquals("há 0s", elapsedText(-1_000))
     }
 
+    @Test
+    fun `active operation names the pair, the normalized verb and the counter`() {
+        val status = running(
+            step = "enviar WhatsApp/x.jpg",
+            done = 161,
+            total = 1_962,
+            phase = 5,
+            pairName = "WhatsApp Images",
+        )
+
+        assertEquals("WhatsApp Images · enviando WhatsApp/x.jpg · 161/1.962", activeOperationText(status))
+    }
+
+    @Test
+    fun `active operation normalizes the download and move verbs`() {
+        assertEquals("Teste · baixando Docs/a.txt", activeOperationText(running("baixar Docs/a.txt")))
+        assertEquals("Teste · movendo local a.txt → b.txt", activeOperationText(running("mover local a.txt → b.txt")))
+        assertEquals("Teste · movendo remoto a.txt → b.txt", activeOperationText(running("mover remoto a.txt → b.txt")))
+    }
+
+    @Test
+    fun `active operation is absent outside a file operation`() {
+        assertNull(activeOperationText(running("lendo OneDrive · página 3 · 600 itens", phase = 1)))
+        assertNull(activeOperationText(running("calculando hashes", done = 3, total = 10, phase = 3)))
+        assertNull(activeOperationText(running("planejando", phase = 4)))
+        assertNull(activeOperationText(SyncStatus.Done(ok())))
+        assertNull(activeOperationText(SyncStatus.Failed(null)))
+        assertNull(activeOperationText(SyncStatus.Never(null)))
+    }
+
+    @Test
+    fun `active operation omits the pair and the counter when there is neither`() {
+        assertEquals("enviando x.jpg", activeOperationText(running("enviar x.jpg", pairName = null)))
+    }
+
     private fun running(
         step: String,
         done: Int = 0,
         total: Int = 0,
         phase: Int = 0,
         phases: Int = 5,
-    ): SyncStatus.Running = SyncStatus.Running("Teste", step, done, total, phase, phases, NOW)
+        pairName: String? = "Teste",
+    ): SyncStatus.Running = SyncStatus.Running(pairName, step, done, total, phase, phases, NOW)
 
     private fun result(
         ok: Boolean = true,

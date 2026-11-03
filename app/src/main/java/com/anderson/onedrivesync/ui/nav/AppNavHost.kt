@@ -112,7 +112,7 @@ fun AppNavHost(
         }
         // Onboarding is the gate: a stale notification must not open a screen that cannot work.
         if (route != null && navController.currentDestination?.route != Routes.ONBOARDING) {
-            navController.navigate(route) { launchSingleTop = true }
+            navController.navigateToTab(route)
         }
         onScreenRequestHandled()
     }
@@ -165,7 +165,7 @@ fun AppNavHost(
                     PairsScreen(
                         onNewPair = { navController.navigate(Routes.WIZARD) },
                         onOpenOnboarding = { navController.navigate(Routes.ONBOARDING) },
-                        onOpenActivity = { navController.navigate(Routes.LOG) { launchSingleTop = true } },
+                        onOpenActivity = { navController.navigateToTab(Routes.LOG) },
                     )
                 }
                 // The notification route only preselects the conflicts tab; the bar keeps one item.
@@ -183,7 +183,7 @@ fun AppNavHost(
                 composable(Routes.WIZARD) {
                     WizardScreen(
                         onClose = { navController.popBackStack() },
-                        onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                        onOpenSettings = { navController.navigateToTab(Routes.SETTINGS) },
                     )
                 }
             }
@@ -215,10 +215,23 @@ fun initialDestination(context: Context, screen: String?): String {
     }
 }
 
+/**
+ * Switches to a bottom-bar route, keeping each tab's own back stack.
+ *
+ * Every push of a tab route must come through here. A plain `navigate` leaves that route above the
+ * start destination without registering its state, and the next `popUpTo(start) { saveState = true }`
+ * then associates the start tab with the pushed route; `restoreState` afterwards restores that
+ * route instead of the tab the user tapped (the "Ver atividade" case: tapping Pares landed on Log).
+ *
+ * The start destination itself is never restored: `popUpTo(start)` keeps it on the stack, so the
+ * state saved under its key belongs to whatever was above it, and restoring it would undo the tab
+ * switch the user just made.
+ */
 private fun NavHostController.navigateToTab(route: String) {
+    val startRoute = graph.findStartDestination().route
     navigate(route) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true
-        restoreState = true
+        restoreState = route != startRoute
     }
 }

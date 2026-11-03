@@ -30,12 +30,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.anderson.onedrivesync.R
 import com.anderson.onedrivesync.sync.CycleResult
 import com.anderson.onedrivesync.sync.SyncState
 import com.anderson.onedrivesync.ui.vm.SyncStatus
+import com.anderson.onedrivesync.ui.vm.activeOperationText
 import com.anderson.onedrivesync.ui.vm.elapsedText
 import com.anderson.onedrivesync.ui.vm.statusDetail
 import com.anderson.onedrivesync.ui.vm.statusHeadline
@@ -119,6 +121,17 @@ fun SyncStatusPanel(
             }
 
             if (status is SyncStatus.Running) {
+                val operation = activeOperationText(status)
+                if (operation != null) {
+                    Text(
+                        text = operation,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 if (status.total > 0) {
                     LinearProgressIndicator(
                         progress = { status.done.toFloat() / status.total },
