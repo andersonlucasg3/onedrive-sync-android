@@ -12,5 +12,8 @@ sealed interface SyncState {
         val step: String,
         val done: Int,
         val total: Int,
+        /** Number of the current phase, 1-based; 0 when the caller does not number phases. */
+        val phase: Int = 0,
+        val phases: Int = 0,
     ) : SyncState
 }

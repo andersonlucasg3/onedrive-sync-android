@@ -81,6 +81,12 @@ class GraphClient(
         return deltaFrom(target)
     }
 
+    /** Delta scoped to one folder; an absolute link Graph returned is replayed unchanged. */
+    suspend fun deltaItem(itemId: String, deltaLink: String? = null): DeltaPage {
+        val target = deltaLink ?: url("me", "drive", "items", itemId, "delta").toString()
+        return deltaFrom(target)
+    }
+
     suspend fun deltaFrom(deltaUrl: String): DeltaPage = withContext(Dispatchers.IO) {
         send { token -> authorized(deltaUrl.toHttpUrl(), token).get().build() }.use { it.decode() }
     }

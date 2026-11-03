@@ -6,7 +6,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-
 class PairProgressTest {
 
     @Test
@@ -16,11 +15,32 @@ class PairProgressTest {
 
     @Test
     fun `running wins over a stored result`() {
-        val running = SyncState.Running("Teste", "calculando hashes", done = 3, total = 10)
+        val running = SyncState.Running("Teste", "calculando hashes", done = 3, total = 10, phase = 3, phases = 5)
 
         val progress = pairProgress(LAST, ok(downloaded = 2), running)
 
-        assertEquals(PairProgress.Running("calculando hashes", 3, 10), progress)
+        assertEquals(PairProgress.Running("calculando hashes", 3, 10, 3, 5), progress)
+    }
+
+    @Test
+    fun `running carries the phase numbers and keeps done over total`() {
+        val running = SyncState.Running("Teste", "lendo OneDrive · página 42 · 8.400 itens", 42, 0, 1, 5)
+
+        val progress = pairProgress(null, null, running) as PairProgress.Running
+
+        assertEquals(1, progress.phase)
+        assertEquals(5, progress.phases)
+        assertEquals("lendo OneDrive · página 42 · 8.400 itens", progress.step)
+    }
+
+    @Test
+    fun `elapsed text is human readable from seconds to hours`() {
+        assertEquals("há 0s", elapsedText(0))
+        assertEquals("há 45s", elapsedText(45_000))
+        assertEquals("há 1m20s", elapsedText(80_000))
+        assertEquals("há 2m", elapsedText(120_000))
+        assertEquals("há 1h05m", elapsedText(3_900_000))
+        assertEquals("há 0s", elapsedText(-1_000))
     }
 
     @Test

@@ -23,14 +23,14 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Orchestrates one sync cycle: local scan, delta fetch, planner, executor, index persistence.
+ * Orchestrates one sync cycle: per pair, delta fetch, local scan, planner, executor, index persistence.
  *
  * One cycle at a time ([Mutex]); [cancel] cancels the job the cycle runs in, so the caller's
  * coroutine sees a normal `CancellationException` and nothing is left half-locked.
  *
- * The delta cursor (`delta_link`) is drive-wide. [syncAll] therefore enumerates once and plans
- * every pair against the same items, advancing the cursor only after all pairs ran; otherwise the
- * second pair would consume an already-advanced delta and never see remote changes.
+ * Each pair owns its delta cursor (`delta_link.<pairId>`) and enumerates its own folder; a pair
+ * whose folder delta Graph refuses permanently falls back to the drive root
+ * (`delta_root.<pairId>`), filtered by [RemoteTree] like any other pair view.
  */
 class SyncEngine(
     private val store: IndexStore,
@@ -128,29 +128,13 @@ class SyncEngine(
             var error: String? = null
             var canceled = false
             val recorded = HashSet<Long>()
-            // The delta is drive-wide: with a single pair its card owns the phase, with several only
-            // the global banner can claim it (the name matches no card on purpose).
+            // With several pairs only the global banner can claim the phase (the name matches no
+            // card on purpose); each pair then reports its own name inside [runPair].
             val label = pairs.singleOrNull()?.displayName.orEmpty()
             try {
-                _state.value = SyncState.Running(label, "lendo OneDrive", 0, 0)
-                val deltaStart = clock()
-                // The cursor is drive-wide. A pair that never finished a cycle has an empty index,
-                // so a cursor-only delta would leave it empty until something changes remotely.
-                val delta = fetchDelta(forceFull = pairs.any { it.lastSyncAt == null })
-                logInfo("delta: ${delta.items.size} itens em ${delta.pages} página(s) em ${clock() - deltaStart} ms")
-                if (!delta.complete) {
-                    val message = "delta truncado em $MAX_PAGES páginas: drive maior do que o suportado; " +
-                        "nenhuma ação foi aplicada neste ciclo"
-                    log(message, "ERROR")
-                    error = message
-                    for (pair in pairs) {
-                        store.setState(CycleResultKeys.pair(pair.id), encodeCycleResult(failedResult(message)))
-                        recorded += pair.id
-                    }
-                    return@withLock
-                }
+                _state.value = SyncState.Running(label, "lendo OneDrive", 0, 0, phase = DELTA_PHASE, phases = PHASES)
                 for (pair in pairs) {
-                    val stats = runPair(pair, delta, onNotify)
+                    val stats = runPair(pair, onNotify)
                     recorded += pair.id
                     done += stats.done
                     failed += stats.failed
@@ -158,17 +142,6 @@ class SyncEngine(
                     conflicts += stats.conflicts
                     downloads += stats.downloads
                     uploads += stats.uploads
-                }
-                // Only advance when the enumeration reached its delta link and no action failed. A
-                // failed action leaves the remote item unchanged, so it never comes back in a later
-                // delta and would be lost. Replaying the same window is safe (planner and executor
-                // are idempotent) and the delta from the same token is cumulative.
-                if (delta.deltaLink != null) {
-                    if (failed == 0) {
-                        store.setState(KEY_DELTA_LINK, delta.deltaLink)
-                    } else {
-                        log("$failed falha(s) no ciclo: cursor delta mantido para repetir a mesma janela")
-                    }
                 }
             } catch (e: CancellationException) {
                 canceled = true
@@ -220,7 +193,6 @@ class SyncEngine(
 
     private suspend fun runPair(
         pair: Pair,
-        delta: DeltaFetch,
         onNotify: (List<PendingOp>, List<ConflictRow>) -> Unit,
     ): PairStats {
         val name = pair.displayName
@@ -233,22 +205,27 @@ class SyncEngine(
         try {
             val prev = store.entries(pair.id)
 
-            _state.value = SyncState.Running(name, "lendo pastas locais", 0, 0)
+            _state.value = SyncState.Running(name, "lendo OneDrive", 0, 0, phase = DELTA_PHASE, phases = PHASES)
+            val delta = pairDelta(pair)
+
+            _state.value = SyncState.Running(name, "lendo pastas locais", 0, 0, phase = SCAN_PHASE, phases = PHASES)
             val scanStart = clock()
             val localFiles = fs.scan()
             logInfo("scan local: ${localFiles.size} entradas em ${clock() - scanStart} ms")
 
             val view = RemoteTree.resolve(pair.remoteId, prev, delta.items)
 
-            _state.value = SyncState.Running(name, "calculando hashes", 0, 0)
             val hashStart = clock()
             val toHash = filesToHash(prev, localFiles, view)
+            _state.value =
+                SyncState.Running(name, "calculando hashes", 0, toHash.size, phase = HASH_PHASE, phases = PHASES)
             val hashes = hashFiles(toHash, fs) { hashed, total ->
-                _state.value = SyncState.Running(name, "calculando hashes", hashed, total)
+                _state.value =
+                    SyncState.Running(name, "calculando hashes", hashed, total, phase = HASH_PHASE, phases = PHASES)
             }
             logInfo("hashes: ${hashes.size}/${toHash.size} em ${clock() - hashStart} ms")
 
-            _state.value = SyncState.Running(name, "planejando", 0, 0)
+            _state.value = SyncState.Running(name, "planejando", 0, 0, phase = PLAN_PHASE, phases = PHASES)
             val planStart = clock()
             val plan = Planner.plan(pair.id, prev, view, localFiles, hashes, clock())
 
@@ -266,7 +243,7 @@ class SyncEngine(
             )
 
             val stats = Executor(remote, fs, store, clock).execute(plan, pair, view) { step, done, total ->
-                _state.value = SyncState.Running(name, step, done, total)
+                _state.value = SyncState.Running(name, step, done, total, phase = EXEC_PHASE, phases = PHASES)
             }
             exec = stats
 
@@ -274,10 +251,12 @@ class SyncEngine(
             val newConflicts = persistConflicts(plan.conflicts)
             pendingCount = newPending.size
             conflictCount = newConflicts.size
-            // A new pair stays "never synced" until a clean cycle, so the next attempt still forces a
-            // full enumeration: holding the cursor alone would replay only the changes after the old
-            // token, and items that did not change would never come back for this pair.
-            if (stats.failed == 0) store.touchPair(pair.id, clock())
+            // The cursor is saved only after the whole pair finished cleanly: advancing it after a
+            // failed action would skip that item forever. Replaying the same window is safe.
+            if (stats.failed == 0) {
+                delta.deltaLink?.let { store.setState(deltaKey(pair.id), it) }
+                store.touchPair(pair.id, clock())
+            }
             if (newPending.isNotEmpty() || newConflicts.isNotEmpty()) onNotify(newPending, newConflicts)
             return PairStats(
                 done = stats.done,
@@ -371,35 +350,74 @@ class SyncEngine(
         return hashes
     }
 
-    private suspend fun fetchDelta(forceFull: Boolean = false): DeltaFetch {
-        val cursor = if (forceFull) null else store.getState(KEY_DELTA_LINK)
-        if (forceFull) log("par sem sincronização anterior: reenumerando o drive do zero")
-        val started = clock()
-        // A full enumeration is legitimate, not a 410 resync: tombstones that do arrive in the
-        // delta must still produce DELETE_* pending ops, so resync stays false on this path.
+    /**
+     * Delta window for one pair. A fresh pair tries the folder scope first; when Graph refuses it
+     * (400/404/405/501, or a not-supported/invalid-request code) the pair permanently falls back to
+     * the drive root and filters it by ancestry. A 410 in either scope restarts that scope.
+     */
+    private suspend fun pairDelta(pair: Pair): DeltaFetch {
+        val cursor = store.getState(deltaKey(pair.id))
+        if (store.getState(deltaRootKey(pair.id)) != null) return deltaFor(pair, rootId = null, cursor = cursor)
         return try {
-            val page = pages(cursor)
-            logInfo("delta: ${page.items.size} itens em ${page.pages} página(s) em ${clock() - started} ms")
-            DeltaFetch(page.items, page.deltaLink, resync = false, complete = page.complete, pages = page.pages)
+            deltaFor(pair, rootId = pair.remoteId, cursor = cursor)
         } catch (e: GraphException) {
-            if (!e.isGone()) throw e
-            log("delta expirou (410 Gone): reenumerando do zero" + (e.code?.let { " (código $it)" } ?: ""))
-            store.setState(KEY_DELTA_LINK, null)
-            val page = pages(null)
-            logInfo("delta: ${page.items.size} itens em ${page.pages} página(s) em ${clock() - started} ms")
-            DeltaFetch(page.items, page.deltaLink, resync = true, complete = page.complete, pages = page.pages)
+            if (!e.isFolderDeltaUnsupported()) throw e
+            // One WARN per pair, ever: the flag makes every later cycle skip the folder attempt.
+            store.setState(deltaRootKey(pair.id), "1")
+            store.setState(deltaKey(pair.id), null)
+            log(
+                "delta por pasta indisponível para ${pair.displayName} (HTTP ${e.status}): " +
+                    "usando a raiz do drive",
+            )
+            deltaFor(pair, rootId = null, cursor = null)
         }
     }
 
-    private suspend fun pages(cursor: String?): Page {
+    private suspend fun deltaFor(pair: Pair, rootId: String?, cursor: String?): DeltaFetch {
+        val started = clock()
+        val page = try {
+            pages(rootId, cursor, pair.displayName)
+        } catch (e: GraphException) {
+            if (!e.isGone()) throw e
+            log(
+                "delta expirou (410 Gone) para ${pair.displayName}: reenumerando do zero" +
+                    (e.code?.let { " (código $it)" } ?: ""),
+            )
+            store.setState(deltaKey(pair.id), null)
+            val fresh = pages(rootId, null, pair.displayName)
+            logDelta(pair, rootId, fresh, started)
+            return DeltaFetch(fresh.items, fresh.deltaLink, resync = true, pages = fresh.pages)
+        }
+        logDelta(pair, rootId, page, started)
+        // A full enumeration is legitimate, not a 410 resync: tombstones that do arrive must still
+        // produce DELETE_* pending ops, so resync stays false on this path.
+        return DeltaFetch(page.items, page.deltaLink, resync = false, pages = page.pages)
+    }
+
+    private fun logDelta(pair: Pair, rootId: String?, page: Page, started: Long) {
+        val scope = if (rootId == null) "raiz do drive" else "pasta ${pair.displayName}"
+        logInfo("delta ($scope): ${page.items.size} itens em ${page.pages} página(s) em ${clock() - started} ms")
+    }
+
+    private suspend fun pages(rootId: String?, cursor: String?, pairName: String): Page {
         // The same item may be reported more than once in one cycle; the last occurrence wins.
         val items = LinkedHashMap<String, RemoteItem>()
         var next: String? = cursor
         var count = 0
         while (count < MAX_PAGES) {
-            val page = remote.deltaPage(next)
+            val page = remote.deltaPage(rootId, next)
             for (item in page.items) items[item.id] = item
             count++
+            // A delta has no real total: the page number and the accumulated item count are the
+            // honest progress numbers, and the card shows them while the enumeration runs.
+            _state.value = SyncState.Running(
+                pairName,
+                "lendo OneDrive · página $count · ${items.size} itens",
+                count,
+                0,
+                phase = DELTA_PHASE,
+                phases = PHASES,
+            )
             if (page.nextLink == null) return Page(items.values.toList(), page.deltaLink, pages = count)
             // One line per page: an enumeration of a big drive takes minutes and must leave a trail
             // in the activity log, which is the only diagnostic the user can send.
@@ -407,9 +425,11 @@ class SyncEngine(
             next = page.nextLink
         }
         // Planning against a partial drive view would invent uploads for items we simply have not
-        // enumerated yet. The cursor stays put so the same range is retried; the log is the only
-        // symptom the user can report.
-        return Page(items.values.toList(), null, complete = false, pages = count)
+        // enumerated yet. Nothing is applied and the cursor stays put so the range is retried.
+        val message = "delta truncado em $MAX_PAGES páginas: drive maior do que o suportado; " +
+            "nenhuma ação foi aplicada neste ciclo"
+        log(message, "ERROR")
+        throw IllegalStateException(message)
     }
 
     private suspend fun keepLocal(pair: Pair, row: ConflictRow): Boolean {
@@ -542,14 +562,12 @@ class SyncEngine(
         val items: List<RemoteItem>,
         val deltaLink: String?,
         val resync: Boolean,
-        val complete: Boolean = true,
         val pages: Int = 1,
     )
 
     private class Page(
         val items: List<RemoteItem>,
         val deltaLink: String?,
-        val complete: Boolean = true,
         val pages: Int = 1,
     )
 
@@ -565,14 +583,34 @@ class SyncEngine(
 
     internal companion object {
         const val TAG = "SyncEngine"
-        const val KEY_DELTA_LINK = "delta_link"
         const val MAX_PAGES = 1000
+
+        /** Number of phases a pair reports while it runs; the card shows "Etapa N de 5". */
+        const val PHASES = 5
+        private const val DELTA_PHASE = 1
+        private const val SCAN_PHASE = 2
+        private const val HASH_PHASE = 3
+        private const val PLAN_PHASE = 4
+        private const val EXEC_PHASE = 5
+
         private const val HASH_PROGRESS_FILES = 50
         private const val HASH_PROGRESS_MS = 250L
+
+        /** Cursor of [pairId]'s delta, in whichever scope it ended up using. */
+        fun deltaKey(pairId: Long): String = "delta_link.$pairId"
+
+        /** Present when [pairId] fell back to the drive root delta; permanent for that pair. */
+        fun deltaRootKey(pairId: Long): String = "delta_root.$pairId"
     }
 }
 
 private fun parentOf(relPath: String): String = relPath.substringBeforeLast('/', "")
+
+/** Graph refuses a folder delta with any of these: the pair must use the drive root instead. */
+private fun GraphException.isFolderDeltaUnsupported(): Boolean =
+    status == 400 || status == 404 || status == 405 || status == 501 ||
+        code?.contains("notSupported", ignoreCase = true) == true ||
+        code?.contains("invalidRequest", ignoreCase = true) == true
 
 private val CONFLICT_STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
 

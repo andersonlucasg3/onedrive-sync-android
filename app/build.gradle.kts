@@ -42,7 +42,10 @@ android {
             // R8 is on: most of the APK was dead code (material-icons-extended ships every icon).
             // scripts/verify-release-apk.ps1 guards the classes that must survive shrinking.
             isMinifyEnabled = true
-            isShrinkResources = true
+            // The resource shrinker cannot see a resource id inlined by `const val` (Notifier.ICON):
+            // it deletes the drawable, so the foreground service crashes with "Invalid notification
+            // (no valid small icon)". The ~0.4 MB of resources it saves does not pay for that risk.
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

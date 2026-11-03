@@ -183,7 +183,7 @@ class SyncEngineTest {
         assertEquals("7be8830200000000000000000300000000000000", entry.remoteHash)
         assertEquals(hashBytes("{}\n".toByteArray()), entry.localHash)
         assertTrue(store.conflictRows.isEmpty())
-        assertNotNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertNotNull(store.stateOf(SyncEngine.deltaKey(PAIR)))
         remote.clearCalls()
 
         runSync()
@@ -192,7 +192,7 @@ class SyncEngineTest {
         assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Upload })
 
         // Force a full enumeration so the second pass really compares the stored hash with the remote one.
-        store.setState(SyncEngine.KEY_DELTA_LINK, null)
+        store.setState(SyncEngine.deltaKey(PAIR), null)
         remote.clearCalls()
         runSync()
 
@@ -328,18 +328,21 @@ class SyncEngineTest {
     }
 
     @Test
-    fun `syncAll downloads both pairs from one shared enumeration`() {
+    fun `syncAll downloads each pair from its own folder delta`() {
         val two = twoPairs()
 
         two.syncAll()
 
         assertEquals("alfa", File(two.localA, "a.txt").readText())
         assertEquals("beta", File(two.localB, "b.txt").readText())
-        assertEquals(1, two.remote.deltaCursors().size)
+        val deltas = two.remote.calls.filterIsInstance<FakeRemoteApi.Call.Delta>()
+        assertEquals(2, deltas.size)
+        assertTrue(deltas.all { it.rootId != null })
+        assertEquals(2, deltas.mapNotNull { it.rootId }.toSet().size)
     }
 
     @Test
-    fun `a remote change in the second pair is not swallowed by the shared cursor`() {
+    fun `a remote change in the second pair is not swallowed by the other pair cursor`() {
         val two = twoPairs()
         two.syncAll()
         two.remote.clearCalls()
@@ -374,16 +377,20 @@ class SyncEngineTest {
 
         assertEquals("beta", File(localB, "b.txt").readText())
         assertEquals(listOf("b.txt"), remote.downloads())
-        // The new pair forced a full enumeration instead of replaying the advanced cursor.
-        assertEquals(listOf<String?>(null), remote.deltaCursors())
+        // The new pair has no cursor, so it enumerates its folder from scratch; the old one replays.
+        val deltas = remote.calls.filterIsInstance<FakeRemoteApi.Call.Delta>()
+        assertEquals(2, deltas.size)
+        assertNull(deltas.single { it.rootId == remoteB }.cursor)
+        assertNotNull(deltas.single { it.rootId == remoteA }.cursor)
     }
 
     @Test
-    fun `a forced full cycle saves the cursor and the next cycle transfers nothing`() {
+    fun `a first clean cycle saves each pair cursor and the next cycle transfers nothing`() {
         val two = twoPairs()
 
         two.syncAll()
-        assertNotNull(two.store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertNotNull(two.store.stateOf(SyncEngine.deltaKey(PAIR)))
+        assertNotNull(two.store.stateOf(SyncEngine.deltaKey(PAIR_B)))
 
         two.remote.clearCalls()
         two.syncAll()
@@ -392,7 +399,128 @@ class SyncEngineTest {
     }
 
     @Test
-    fun `a remote deletion still queues a local delete after a forced full cycle`() {
+    fun `a pair on a folder enumerates only that folder`() {
+        remote.addFolder("Docs")
+        remote.addFolder("Docs/Sub")
+        remote.addFile("Docs/Sub/a.txt", "alfa")
+        remote.addFolder("Outros")
+        remote.addFile("Outros/b.txt", "beta")
+        val local = File(root, "docs").apply { mkdirs() }
+        val folderId = remote.idOf("Docs")
+        val store = FakeIndexStore(listOf(pairOf(PAIR, folderId, local)))
+        val engine = engineFor(store, remote)
+
+        runBlocking { engine.syncAll() }
+
+        val deltas = remote.calls.filterIsInstance<FakeRemoteApi.Call.Delta>()
+        assertTrue(deltas.isNotEmpty())
+        assertTrue(deltas.all { it.rootId == folderId })
+        assertEquals("alfa", File(local, "Sub/a.txt").readText())
+        assertFalse(File(local, "b.txt").exists())
+        assertEquals(setOf("Sub", "Sub/a.txt"), store.entriesOf(PAIR).map { it.relPath }.toSet())
+    }
+
+    @Test
+    fun `a new folder pair stores its cursor and the next cycle does not reenumerate`() {
+        remote.addFolder("Docs")
+        remote.addFile("Docs/a.txt", "alfa")
+        val local = File(root, "docs").apply { mkdirs() }
+        val store = FakeIndexStore(listOf(pairOf(PAIR, remote.idOf("Docs"), local)))
+        val engine = engineFor(store, remote)
+
+        runBlocking { engine.syncAll() }
+        assertNotNull(store.stateOf(SyncEngine.deltaKey(PAIR)))
+        remote.clearCalls()
+
+        runBlocking { engine.syncAll() }
+
+        assertEquals(0, remote.downloads().size)
+        val cursors = remote.deltaCursors()
+        assertTrue(cursors.size <= 1)
+        assertTrue(cursors.none { it == null })
+    }
+
+    @Test
+    fun `folder delta unsupported falls back to the root and is remembered`() {
+        remote.folderDeltaUnsupported = true
+        remote.addFolder("Docs")
+        remote.addFile("Docs/a.txt", "alfa")
+        val local = File(root, "docs").apply { mkdirs() }
+        val store = FakeIndexStore(listOf(pairOf(PAIR, remote.idOf("Docs"), local)))
+        val engine = engineFor(store, remote)
+
+        runBlocking { engine.syncAll() }
+
+        assertEquals("alfa", File(local, "a.txt").readText())
+        assertEquals("1", store.stateOf(SyncEngine.deltaRootKey(PAIR)))
+        val warn = store.logs.single { it.startsWith("WARN") && it.contains("delta por pasta indisponível") }
+        assertTrue(warn.contains("HTTP 400"))
+        assertTrue(warn.contains("Teste $PAIR"))
+        assertEquals(
+            listOf(false, true),
+            remote.calls.filterIsInstance<FakeRemoteApi.Call.Delta>().map { it.rootId == null },
+        )
+
+        remote.clearCalls()
+        runBlocking { engine.syncAll() }
+
+        val deltas = remote.calls.filterIsInstance<FakeRemoteApi.Call.Delta>()
+        assertEquals(1, deltas.size)
+        assertNull(deltas.single().rootId)
+        assertEquals(1, store.logs.count { it.contains("delta por pasta indisponível") })
+    }
+
+    @Test
+    fun `410 on the folder delta clears the cursor and reenumerates with resync`() {
+        remote.addFolder("Docs")
+        remote.addFile("Docs/a.txt", "x")
+        val local = File(root, "docs").apply { mkdirs() }
+        val store = FakeIndexStore(listOf(pairOf(PAIR, remote.idOf("Docs"), local)))
+        val engine = engineFor(store, remote)
+        runBlocking { engine.syncAll() }
+        assertTrue(File(local, "a.txt").delete())
+        remote.clearCalls()
+        remote.failNextDeltaWithGone = true
+
+        runBlocking { engine.syncAll() }
+
+        val cursors = remote.deltaCursors()
+        assertEquals(2, cursors.size)
+        assertNotNull(cursors.first())
+        assertNull(cursors.last())
+        assertTrue(store.pendingOps.isEmpty())
+        assertTrue(store.entriesOf(PAIR).any { it.relPath == "a.txt" })
+        assertFalse(File(local, "a.txt").exists())
+        assertNotNull(store.stateOf(SyncEngine.deltaKey(PAIR)))
+    }
+
+    @Test
+    fun `each pair keeps its own cursor and one does not invalidate the other`() {
+        val two = twoPairs()
+        two.syncAll()
+        assertNotNull(two.store.stateOf(SyncEngine.deltaKey(PAIR)))
+        assertNotNull(two.store.stateOf(SyncEngine.deltaKey(PAIR_B)))
+
+        // Simulate a pair that needs a full re-enumeration; the other must keep replaying its cursor.
+        two.store.setState(SyncEngine.deltaKey(PAIR), null)
+        two.remote.clearCalls()
+        two.syncAll()
+
+        val deltas = two.remote.calls.filterIsInstance<FakeRemoteApi.Call.Delta>()
+        assertEquals(2, deltas.size)
+        assertEquals(1, deltas.count { it.cursor == null })
+        assertEquals(1, deltas.count { it.cursor != null })
+        assertNotNull(two.store.stateOf(SyncEngine.deltaKey(PAIR_B)))
+
+        two.remote.addFile("B/b.txt", "beta 2", mtimeMs = 1_700_000_000_000)
+        two.remote.clearCalls()
+        two.syncAll()
+
+        assertEquals(listOf("b.txt"), two.remote.downloads())
+    }
+
+    @Test
+    fun `a remote deletion still queues a local delete after a full re-enumeration`() {
         val two = twoPairs()
         two.syncAll()
         two.remote.remove(two.remote.idOf("B/b.txt"))
@@ -413,14 +541,14 @@ class SyncEngineTest {
 
         runSync()
 
-        assertNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertNull(store.stateOf(SyncEngine.deltaKey(PAIR)))
         assertFalse(File(root, "a.txt").exists())
         assertTrue(store.entriesOf(PAIR).isEmpty())
 
         runSync()
 
         assertEquals("conteudo", File(root, "a.txt").readText())
-        assertNotNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertNotNull(store.stateOf(SyncEngine.deltaKey(PAIR)))
     }
 
     @Test
@@ -435,7 +563,7 @@ class SyncEngineTest {
         runBlocking { engine.syncAll() }
 
         assertNull(store.getPair(PAIR)?.lastSyncAt)
-        assertNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertNull(store.stateOf(SyncEngine.deltaKey(PAIR)))
         assertFalse(File(local, "a.txt").exists())
 
         runBlocking { engine.syncAll() }
@@ -452,7 +580,7 @@ class SyncEngineTest {
 
         runSync()
 
-        assertNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertNull(store.stateOf(SyncEngine.deltaKey(PAIR)))
         assertFalse(File(root, "a.txt").exists())
         assertTrue(store.entriesOf(PAIR).isEmpty())
 
@@ -470,7 +598,7 @@ class SyncEngineTest {
 
         runSync()
 
-        assertNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertNull(store.stateOf(SyncEngine.deltaKey(PAIR)))
         assertFalse(File(root, "a.txt").exists())
         assertTrue(store.entriesOf(PAIR).isEmpty())
 
@@ -519,13 +647,13 @@ class SyncEngineTest {
     fun `a healthy cycle advances the delta cursor`() {
         remote.addFile("a.txt", "x")
         runSync()
-        val first = store.stateOf(SyncEngine.KEY_DELTA_LINK)
+        val first = store.stateOf(SyncEngine.deltaKey(PAIR))
         assertNotNull(first)
 
         remote.addFile("b.txt", "y")
         runSync()
 
-        val second = store.stateOf(SyncEngine.KEY_DELTA_LINK)
+        val second = store.stateOf(SyncEngine.deltaKey(PAIR))
         assertNotNull(second)
         assertNotEquals(first, second)
         assertEquals("y", File(root, "b.txt").readText())

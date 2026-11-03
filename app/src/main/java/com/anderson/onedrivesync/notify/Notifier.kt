@@ -83,7 +83,7 @@ object Notifier {
         if (text.isEmpty() || !allowed(context)) return
         val screen = if (conflictCount > 0) SCREEN_CONFLICTS else SCREEN_PENDING
         val notification = NotificationCompat.Builder(context, CHANNEL_ALERTS)
-            .setSmallIcon(ICON)
+            .setSmallIcon(smallIcon(context))
             .setContentTitle(context.getString(R.string.notif_alerts_title))
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -105,7 +105,7 @@ object Notifier {
     fun notifyError(context: Context, message: String) {
         if (!allowed(context)) return
         val notification = NotificationCompat.Builder(context, CHANNEL_RESULT)
-            .setSmallIcon(ICON)
+            .setSmallIcon(smallIcon(context))
             .setContentTitle(context.getString(R.string.notif_error_title))
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
@@ -126,7 +126,7 @@ object Notifier {
         if (!allowed(context)) return
         val text = context.getString(R.string.notif_update_text)
         val notification = NotificationCompat.Builder(context, CHANNEL_RESULT)
-            .setSmallIcon(ICON)
+            .setSmallIcon(smallIcon(context))
             .setContentTitle(context.getString(R.string.notif_update_title, versionName))
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -152,7 +152,7 @@ object Notifier {
         val max = total.coerceAtLeast(0)
         val value = if (max > 0) done.coerceIn(0, max) else 0
         val builder = NotificationCompat.Builder(context, CHANNEL_PROGRESS)
-            .setSmallIcon(ICON)
+            .setSmallIcon(smallIcon(context))
             .setContentTitle(context.getString(R.string.notif_progress_title))
             .setContentText(text)
             .setProgress(max, value, max == 0)
@@ -190,6 +190,18 @@ object Notifier {
 
     private fun conflictsText(count: Int): String =
         if (count == 1) "1 conflito aguardando decisão" else "$count conflitos aguardando decisão"
+
+    /**
+     * [ICON] is a `const val`, so Kotlin inlines the resource id and a bad release build can carry
+     * 0 instead of the drawable. Posting a notification with icon 0 throws "Invalid notification (no
+     * valid small icon)", so resolve by name and then fall back to a framework icon.
+     */
+    private fun smallIcon(context: Context): Int {
+        val inlined = ICON
+        if (inlined != 0) return inlined
+        val resolved = context.resources.getIdentifier("ic_notification", "drawable", context.packageName)
+        return if (resolved != 0) resolved else android.R.drawable.stat_sys_download
+    }
 
     private fun allowed(context: Context): Boolean {
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false

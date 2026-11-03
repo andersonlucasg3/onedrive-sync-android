@@ -109,6 +109,21 @@ class GraphClientTest {
     }
 
     @Test
+    fun `delta item requests the folder delta and replays the absolute link`() = runBlocking {
+        val deltaLink = server.url("/v1.0/me/drive/items/DOCS!1/delta?token=a%2Fb").toString()
+        server.enqueue(json("""{"value":[]}"""))
+        server.enqueue(json("""{"value":[]}"""))
+
+        client.deltaItem("DOCS!1")
+        client.deltaItem("DOCS!1", deltaLink)
+
+        val first = server.takeRequest()
+        assertEquals("GET", first.method)
+        assertEquals(listOf("v1.0", "me", "drive", "items", "DOCS!1", "delta"), first.requestUrl?.pathSegments)
+        assertEquals(deltaLink, server.takeRequest().requestUrl.toString())
+    }
+
+    @Test
     fun `delta parses deleted moved and parent id only items`() = runBlocking {
         val nextLink = server.url("/v1.0/me/drive/root/delta?token=page-2").toString()
         val deltaLink = server.url("/v1.0/me/drive/root/delta?token=final").toString()

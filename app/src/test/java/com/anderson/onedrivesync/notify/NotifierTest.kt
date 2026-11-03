@@ -1,8 +1,22 @@
 package com.anderson.onedrivesync.notify
 
+import android.app.Application
+import android.content.Context
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 
+/**
+ * `progressNotification` needs real resources to build a [android.app.Notification], so the whole
+ * class runs under Robolectric (same setup as `DbTest`); [Notifier.pendingText] stays pure.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36], application = Application::class)
 class NotifierTest {
 
     @Test
@@ -34,5 +48,15 @@ class NotifierTest {
     @Test
     fun `nothing queued has no text`() {
         assertEquals("", Notifier.pendingText(pending = 0, conflicts = 0))
+    }
+
+    // A notification posted with small icon 0 throws "Invalid notification (no valid small icon)"
+    // and kills the foreground service; this guards the icon resolution for every builder.
+    @Test
+    fun `progress notification always carries a small icon`() {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val notification = Notifier.progressNotification(context, "x", 0, 0, null)
+        assertTrue("notification.icon must not be 0", notification.icon != 0)
+        assertNotNull("notification.smallIcon must not be null", notification.smallIcon)
     }
 }

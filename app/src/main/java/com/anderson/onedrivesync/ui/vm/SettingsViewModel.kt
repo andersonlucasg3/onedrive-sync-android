@@ -251,8 +251,8 @@ class SettingsViewModel(
     }
 
     /**
-     * Drops the drive-wide delta cursor so the next cycle re-enumerates everything. Nothing is
-     * deleted: a fresh enumeration only makes the planner see items it already indexed.
+     * Drops every pair's delta cursor so the next cycle re-enumerates each pair folder from scratch.
+     * Nothing is deleted: a fresh enumeration only makes the planner see items it already indexed.
      */
     fun forceFullResync() {
         if (_state.value.diagnostics.resyncing) return
@@ -260,7 +260,10 @@ class SettingsViewModel(
         viewModelScope.launch {
             val error = withContext(Dispatchers.IO) {
                 try {
-                    StateDao.remove(db.writableDatabase, SyncEngine.KEY_DELTA_LINK)
+                    val database = db.writableDatabase
+                    for (pair in PairsDao.list(database)) {
+                        StateDao.remove(database, SyncEngine.deltaKey(pair.id))
+                    }
                     null
                 } catch (e: CancellationException) {
                     throw e

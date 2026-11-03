@@ -10,17 +10,18 @@ import java.io.File
  * [RemoteApi] over [GraphClient].
  *
  * The stored cursor is either a full `@odata.deltaLink`/`@odata.nextLink` URL (passed through as
- * is) or null for a fresh enumeration; `GraphClient` owns token refresh and 429 retries.
+ * is) or null for a fresh enumeration; `GraphClient` owns token refresh and 429 retries. A null
+ * `rootId` enumerates the drive root; any other id enumerates that folder.
  */
 class GraphRemoteApi(
     private val client: GraphClient,
     private val log: (String) -> Unit = {},
 ) : RemoteApi {
-    override suspend fun deltaPage(cursor: String?): DeltaPage = call("delta") {
-        val page = when {
-            cursor == null -> client.deltaRoot(null)
-            cursor.startsWith("http") -> client.deltaFrom(cursor)
-            else -> client.deltaRoot(cursor)
+    override suspend fun deltaPage(rootId: String?, cursor: String?): DeltaPage = call("delta") {
+        val page = if (rootId == null) {
+            client.deltaRoot(cursor)
+        } else {
+            client.deltaItem(rootId, cursor)
         }
         DeltaPage(
             items = page.value.map(::remoteItemOf),

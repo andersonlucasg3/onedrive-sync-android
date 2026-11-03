@@ -59,7 +59,7 @@ com.anderson.onedrivesync
 pairs(id INTEGER PK, remote_id TEXT, remote_path TEXT, local_path TEXT,
       display_name TEXT, enabled INT, created_at INT, last_sync_at INT)
 
-state(key TEXT PK, value TEXT)   -- 'delta_link' global do drive, 'last_full_scan', etc.
+state(key TEXT PK, value TEXT)   -- 'delta_link.<pair_id>' por par, 'delta_root.<pair_id>' (fallback), etc.
 
 entries(id INTEGER PK, pair_id INT, rel_path TEXT UNIQUE(pair_id,rel_path),
         parent_rel TEXT, name TEXT, is_dir INT, size INT, mtime INT,
@@ -86,6 +86,7 @@ Base `https://graph.microsoft.com/v1.0`. Token via `Authorization: Bearer`.
 | Operação | Request |
 |---|---|
 | Delta do drive (raiz) | `GET /me/drive/root/delta` ou a URL absoluta de `@odata.deltaLink`/`@odata.nextLink` |
+| Delta por pasta | `GET /me/drive/items/{itemId}/delta` ou a URL absoluta de `@odata.deltaLink`/`@odata.nextLink` |
 | Metadados do item | `GET /me/drive/items/{itemId}` |
 | Children (browser de pastas) | `GET /me/drive/items/{itemId}/children` |
 | Baixar | `GET /me/drive/items/{id}/content` → follow redirect, stream p/ `.part` |
@@ -99,29 +100,37 @@ Campos que importam no delta: `id, name, size, parentReference{id,path}, folder,
 file{hashes{quickXorHash}, mimeType}, fileSystemInfo{lastModifiedDateTime,createdDateTime},
 deleted{state}`, `@removed{reason}`.
 
-**Regras do delta (confirmadas na doc oficial v1.0):**
-- O delta suportado é o da **raiz do drive**; delta por pasta não é documentado. Filtramos por par
-  reconstruindo o caminho pela cadeia de `parentReference.id`.
+**Regras do delta (v1.0):**
+- O caminho padrão é o **delta por pasta** (`/me/drive/items/{itemId}/delta`), com cursor por par em
+  `state['delta_link.<pair_id>']`. Quando a API recusa o delta da pasta (HTTP 400/404/405/501 ou
+  código `notSupported`/`invalidRequest`), o par cai **automaticamente** para o delta da raiz e grava
+  `state['delta_root.<pair_id>'] = "1"`: o fallback é permanente para aquele par e é logado uma vez
+  (`WARN [SyncEngine] delta por pasta indisponível para <nome> (HTTP <n>): usando a raiz do drive`).
+- O delta da raiz é **caro em drives grandes**: num drive de ~346 GB usados a enumeração chegou a
+  100 páginas / 20.002 itens após ~1m45s (~1s por página) sem terminar. Por isso ele deixou de ser o
+  caminho de sync; quando usado como fallback, o resultado é filtrado por ancestral na reconstrução
+  de `rel_path`.
 - `parentReference.path` **pode vir ausente** → nunca depender de path remoto; sempre `id`.
 - Renomear/mover uma pasta **não** retorna os descendentes: o caminho dos filhos é recalculado
   localmente a partir do ancestral renomeado (é assim que move de pasta propaga).
 - O mesmo item pode aparecer várias vezes na página → usar a última ocorrência.
-- `410 Gone` = token velho: reiniciar enumeração completa e reconciliar; nada é apagado por
-  ausência nesse ciclo sem confirmação.
+- `410 Gone` = token velho: apaga o cursor **daquele par** (`delta_link.<pair_id>`) e reinicia a
+  enumeração do par com `resync=true`; nada é apagado por ausência nesse ciclo.
 - Em exclusão, OneDrive pessoal omite `name` e `size` → só `id` + `deleted`.
 - `quickXorHash` é o hash nativo do OneDrive — detecta conteúdo igual sem baixar. Arquivos
   > 4 GiB podem não ter hash → comparar `size`+mtime.
 
 ## Algoritmo de sync
 
-1. `remoteScan` (uma vez por ciclo, para o drive inteiro): percorre `delta` (raiz) até
-   `@odata.deltaLink`; acumula por `id` (última ocorrência vence) e grava o `delta_link` global
-   em `state`. Depois, para cada par, seleciona os itens cujo ancestral alcance a raiz do par,
-   reconstruindo `rel_path` pela cadeia de `parentReference.id` — em passes repetidos até
-   estabilizar, porque a ordem das páginas não é a da árvore e a raiz do par pode ser uma pasta
-   renomeada. Itens sem ancestral conhecido (pasta pai fora do ciclo) ficam pendentes até o
-   próximo ciclo. `deleted`/`@removed` = exclusão remota, identificada **só pelo `id`**
-   (o nome pode vir ausente).
+1. `remoteScan` (uma vez por par): percorre o delta do par (da pasta; fallback da raiz se a API
+   recusar) até `@odata.deltaLink`; acumula por `id` (última ocorrência vence) e grava
+   `delta_link.<pair_id>` **só depois** que o par terminou sem falhas. Cada par tem cursor próprio:
+   um par novo enumera do zero sem invalidar o cursor dos outros. Depois, seleciona os itens cujo
+   ancestral alcança a raiz do par, reconstruindo `rel_path` pela cadeia de `parentReference.id` — em
+   passes repetidos até estabilizar, porque a ordem das páginas não é a da árvore e a raiz do par
+   pode ser uma pasta renomeada. Itens sem ancestral conhecido (pasta pai fora do ciclo) ficam
+   pendentes até o próximo ciclo. `deleted`/`@removed` = exclusão remota, identificada **só pelo
+   `id`** (o nome pode vir ausente).
 2. `localScan`: walk recursivo de `local_path` (ignora `.part`), produz
    Mapa<relPath, LocalItem{size,mtime,hash?}>; hash (`quickXorHash`) calculado só quando
    size/mtime divergem do índice (lazy).
@@ -144,11 +153,16 @@ deleted{state}`, `@removed{reason}`.
    Falha isolada não aborta o par (registra em log, retry na próxima rodada).
 5. Pós-execução: pastas criadas/removidas conforme o plano e `last_sync_at` do par.
 
-Primeira execução (sem `delta_link`): delta completo; itens remotos viram `Download`; local
-existente com mesmo nome/tamanho → compara hash; se igual, marca SYNCED (evita re-download).
+Primeira execução (sem `delta_link.<pair_id>`): delta completo do par; itens remotos viram
+`Download`; local existente com mesmo nome/tamanho → compara hash; se igual, marca SYNCED
+(evita re-download).
+
+Progresso: 5 fases por par — 1 delta (`lendo OneDrive · página N · X itens`), 2 scan local,
+3 hashes (`i/total`), 4 planejamento, 5 transferências (`done/total`). O delta não tem denominador:
+a UI usa barra indeterminada, o contador real (página/itens) e o tempo decorrido do ciclo.
 
 Concorrência: uma sincronização por vez (Mutex em `SyncEngine`); UI observa via `SyncState`
-(StateFlow: Idle, Running(pairId, action, done, total), Error(msg)).
+(StateFlow: Idle, Scanning, Running(pairName, step, done, total, phase, phases)).
 
 ## Background
 
@@ -228,8 +242,9 @@ Repo público: `github.com/andersonlucasg3/onedrive-sync-android`.
 
 - A **raiz do drive** é pareável: o wizard começa em `/me/drive/root` com `id = null` e, ao
   escolher a raiz, resolve o item id real (`GET /me/drive/root`) antes de gravar o par.
-- O par remoto pode ser qualquer pasta; o delta continua sendo o da raiz do drive, filtrado por
-  ancestral na reconstrução de `rel_path`.
+- O par remoto pode ser qualquer pasta; cada par usa o delta da **própria pasta**, com cursor
+  próprio. Se a API recusar o delta por pasta, cai para o delta da raiz filtrado por ancestral na
+  reconstrução de `rel_path` (flag permanente por par em `delta_root.<pair_id>`).
 - O par local não pode ser a própria raiz do armazenamento (`localPath != storageRoot`).
 
 ## Convenções

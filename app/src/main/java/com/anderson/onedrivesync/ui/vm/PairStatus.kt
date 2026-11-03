@@ -7,7 +7,13 @@ import com.anderson.onedrivesync.sync.SyncState
 sealed interface PairProgress {
     data object Never : PairProgress
 
-    data class Running(val step: String, val done: Int, val total: Int) : PairProgress
+    data class Running(
+        val step: String,
+        val done: Int,
+        val total: Int,
+        val phase: Int = 0,
+        val phases: Int = 0,
+    ) : PairProgress
 
     data class Ok(val result: CycleResult) : PairProgress
 
@@ -22,7 +28,9 @@ sealed interface PairProgress {
  * back to "never"; it reports an empty successful result.
  */
 fun pairProgress(lastSyncAt: Long?, result: CycleResult?, running: SyncState.Running?): PairProgress {
-    if (running != null) return PairProgress.Running(running.step, running.done, running.total)
+    if (running != null) {
+        return PairProgress.Running(running.step, running.done, running.total, running.phase, running.phases)
+    }
     if (result != null && (!result.ok || result.failed > 0 || result.error != null)) {
         return PairProgress.Failed(result)
     }
@@ -58,3 +66,20 @@ fun cycleSummaryText(result: CycleResult): String {
 /** First line of a multi-line error, trimmed; null when there is no error text to show. */
 fun firstErrorLine(result: CycleResult?): String? =
     result?.error?.lineSequence()?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+
+/**
+ * "há 1m20s": how long the running cycle has been going. A delta has no total, so time is the only
+ * honest evidence that the enumeration is still moving.
+ */
+fun elapsedText(elapsedMs: Long): String {
+    val seconds = (elapsedMs.coerceAtLeast(0) / 1000).toInt()
+    if (seconds < 60) return "há ${seconds}s"
+    val minutes = seconds / 60
+    val restSeconds = seconds % 60
+    if (minutes < 60) {
+        return if (restSeconds == 0) "há ${minutes}m" else "há ${minutes}m${restSeconds}s"
+    }
+    val hours = minutes / 60
+    val restMinutes = minutes % 60
+    return if (restMinutes == 0) "há ${hours}h" else "há ${hours}h${restMinutes.toString().padStart(2, '0')}m"
+}

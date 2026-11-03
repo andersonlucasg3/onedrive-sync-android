@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -71,8 +72,10 @@ import com.anderson.onedrivesync.ui.vm.PairProgress
 import com.anderson.onedrivesync.ui.vm.PairRow
 import com.anderson.onedrivesync.ui.vm.PairsViewModel
 import com.anderson.onedrivesync.ui.vm.cycleSummaryText
+import com.anderson.onedrivesync.ui.vm.elapsedText
 import com.anderson.onedrivesync.ui.vm.firstErrorLine
 import com.anderson.onedrivesync.ui.vm.pairProgress
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -377,12 +380,12 @@ private fun PairProgressLine(progress: PairProgress) {
             } else {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
-            Text(
-                text = if (progress.total > 0) {
-                    stringResource(R.string.pairs_syncing_progress, progress.step, progress.done, progress.total)
-                } else {
-                    stringResource(R.string.pairs_syncing, progress.step)
-                },
+            RunningText(
+                step = progress.step,
+                done = progress.done,
+                total = progress.total,
+                phase = progress.phase,
+                phases = progress.phases,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -433,17 +436,66 @@ private fun CycleRunningBanner(running: SyncState.Running) {
             .padding(start = 16.dp, top = 12.dp, end = 16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
     ) {
-        Text(
-            text = if (running.total > 0) {
-                stringResource(R.string.pairs_syncing_progress, running.step, running.done, running.total)
-            } else {
-                stringResource(R.string.pairs_syncing, running.step)
-            },
+        RunningText(
+            step = running.step,
+            done = running.done,
+            total = running.total,
+            phase = running.phase,
+            phases = running.phases,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSecondaryContainer,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         )
     }
+}
+
+/**
+ * "Etapa 2 de 5 · lendo OneDrive · página 42 · 8.400 itens · há 1m20s".
+ *
+ * No delta has a total, so the text carries the phase number, the real counters and the elapsed
+ * time: the bar stays indeterminate without pretending to know how much is left.
+ */
+@Composable
+private fun RunningText(
+    step: String,
+    done: Int,
+    total: Int,
+    phase: Int,
+    phases: Int,
+    style: TextStyle,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    val phaseLabel = if (phases > 0 && phase > 0) {
+        stringResource(R.string.pairs_syncing_phase, phase, phases)
+    } else {
+        null
+    }
+    val stepLabel = if (total > 0) {
+        stringResource(R.string.pairs_syncing_progress, step, done, total)
+    } else {
+        stringResource(R.string.pairs_syncing, step)
+    }
+    Text(
+        text = listOfNotNull(phaseLabel, stepLabel, elapsedLabel()).joinToString(" · "),
+        style = style,
+        color = color,
+        modifier = modifier,
+    )
+}
+
+/** Ticks once per second while the caller is composed; leaving it (cycle end) cancels the ticker. */
+@Composable
+private fun elapsedLabel(): String {
+    var elapsedMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(Unit) {
+        val started = System.currentTimeMillis()
+        while (true) {
+            elapsedMs = System.currentTimeMillis() - started
+            delay(1_000)
+        }
+    }
+    return elapsedText(elapsedMs)
 }
 
 @Composable
