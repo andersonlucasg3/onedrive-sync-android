@@ -13,7 +13,7 @@ locais arbitrárias do armazenamento compartilhado.
 | Conflito | **Perguntar ao usuário** — operação fica pendente, notificação + tela de conflitos |
 | Exclusão | Propaga nos dois sentidos **com confirmação** (fila de exclusões pendentes) |
 | Move/rename | Detectado nos dois sentidos; move remoto = mesmo `id` com `parentReference`/`name` diferente → move local sem re-download |
-| Auth | OAuth2 **device code flow** manual (OkHttp), Client ID embutido no APK e tenant configurável em runtime |
+| Auth | OAuth2 **Authorization Code + PKCE** no WebView do app (alternativa: device code), Client ID embutido no APK e authority `consumers` fixa |
 | Entrega | App completo: background, notificações, histórico/log, onboarding de permissões |
 
 ## Stack e versões (fixas)
@@ -42,14 +42,14 @@ $env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"
 ```
 com.anderson.onedrivesync
   App.kt                  Application + AppContainer (DI manual, lazy singletons)
-  core/     Result.kt, Logs.kt (ring buffer persistido), Prefs.kt (tenant, settings)
-  auth/     DeviceCodeFlow.kt, TokenStore.kt (Keystore AES-GCM), AuthManager.kt
+  core/     Result.kt, Logs.kt (ring buffer persistido), Prefs.kt (settings + PKCE pendente)
+  auth/     Pkce.kt, InteractiveAuth.kt, TokenStore.kt (Keystore AES-GCM), AuthManager.kt
   graph/    GraphClient.kt, GraphDtos.kt, GraphError.kt
   db/       Db.kt (schema+open), PairsDao.kt, EntriesDao.kt, PendingDao.kt, LogDao.kt
   sync/     LocalScanner.kt, QuickXorHash.kt, Planner.kt, Executor.kt, SyncEngine.kt, SyncState.kt
   work/     SyncWorker.kt, SyncService.kt (foreground dataSync), Scheduler.kt
   hyperos/  HyperOsOnboarding.kt (autostart MIUI, bateria, all-files, notificações)
-  ui/       MainActivity.kt, theme/, nav/, screens/ (Pairs, Wizard, Conflicts, Deletions, Log, Settings, Onboarding)
+  ui/       MainActivity.kt, auth/ (WebView do login), theme/, nav/, screens/ (Pairs, Wizard, Conflicts, Deletions, Log, Settings, Onboarding)
   notify/   Notifier.kt (canais: sync, conflito, exclusão)
 ```
 
@@ -179,7 +179,7 @@ Concorrência: uma sincronização por vez (Mutex em `SyncEngine`); UI observa v
 - `ConflictsScreen`: lista com lado local/remoto (nome, tamanho, data), 3 botões de decisão.
 - `DeletionsScreen`: fila de exclusões pendentes com aprovação individual/em lote.
 - `LogScreen`: log persistido, filtro por nível.
-- `SettingsScreen`: Diretório (tenant), intervalo de sync, Wi-Fi only, diretório de downloads parciais.
+- `SettingsScreen`: conta Microsoft, intervalo de sync, Wi-Fi only, diagnóstico e atualizações.
 
 ## Distribuição e auto-update
 

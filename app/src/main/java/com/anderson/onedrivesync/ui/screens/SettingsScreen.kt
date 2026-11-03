@@ -57,7 +57,6 @@ import com.anderson.onedrivesync.hyperos.HyperOsPermissions
 import com.anderson.onedrivesync.sync.SyncState
 import com.anderson.onedrivesync.ui.components.AuthSection
 import com.anderson.onedrivesync.ui.components.ChecklistItem
-import com.anderson.onedrivesync.ui.components.TenantField
 import com.anderson.onedrivesync.ui.util.relativeTime
 import com.anderson.onedrivesync.ui.vm.DiagnosticsUiState
 import com.anderson.onedrivesync.ui.vm.SettingsUiState
@@ -118,7 +117,6 @@ fun SettingsScreen(
         ) {
             SectionTitle(text = stringResource(R.string.settings_account_title))
             AuthSection()
-            TenantField(tenant = state.tenant, onSave = viewModel::setTenant)
 
             SectionTitle(text = stringResource(R.string.settings_sync_title))
             SyncCard(

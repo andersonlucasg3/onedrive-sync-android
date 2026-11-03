@@ -1,6 +1,7 @@
 package com.anderson.onedrivesync.graph
 
 import com.anderson.onedrivesync.auth.AuthManager
+import com.anderson.onedrivesync.auth.FakePkceStorage
 import com.anderson.onedrivesync.auth.FakeTokenStore
 import com.anderson.onedrivesync.auth.Tokens
 import java.io.File
@@ -259,6 +260,7 @@ class GraphClientTest {
         val auth = AuthManager(
             clientId = { "client-1" },
             tokens = store,
+            pkce = FakePkceStorage(),
             http = OkHttpClient(),
             authBase = server.url("/").toString(),
         )

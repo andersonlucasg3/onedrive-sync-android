@@ -24,7 +24,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.anderson.onedrivesync.App
+import com.anderson.onedrivesync.BuildConfig
 import com.anderson.onedrivesync.R
+import com.anderson.onedrivesync.auth.isRedirectUri
 import com.anderson.onedrivesync.log.CrashLogger
 import com.anderson.onedrivesync.log.shareLog
 import com.anderson.onedrivesync.notify.Notifier
@@ -41,6 +43,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleAuthRedirect(intent)
         // A corrupt database would otherwise crash the first screen that queries it. Touching it
         // here turns that failure into the error screen below instead of a crash loop.
         val startup = runCatching {
@@ -73,8 +76,24 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // The OAuth redirect is a result to consume, not a screen to open.
+        if (handleAuthRedirect(intent)) return
         setIntent(intent)
         newIntent.value = intent
+    }
+
+    /**
+     * Alternative redirect (`msal<clientId>://auth`) delivered as a VIEW intent, for a registration
+     * that adds that URI. The PKCE material lives in Prefs, so the exchange also works when Android
+     * recreated the process; it runs in the manager's own scope so closing this activity is safe.
+     * The data is cleared first, so a rotation does not replay the code.
+     */
+    private fun handleAuthRedirect(intent: Intent?): Boolean {
+        val uri = intent?.data ?: return false
+        if (!isRedirectUri(uri, BuildConfig.DEFAULT_CLIENT_ID)) return false
+        intent.data = null
+        (application as? App)?.container?.authManager?.completeInteractiveSignInInBackground(uri)
+        return true
     }
 }
 

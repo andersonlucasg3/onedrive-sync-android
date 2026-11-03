@@ -21,6 +21,8 @@ android {
         // Baked-in public client id; -PappClientId overrides it for a build with another registration.
         val appClientId = (findProperty("appClientId") as String?) ?: "b556261b-31a9-49a9-aa9b-2a4a611291ff"
         buildConfigField("String", "DEFAULT_CLIENT_ID", "\"$appClientId\"")
+        // Redirect URI registered in Entra ID: msal<clientId>://auth (custom scheme for a public client).
+        manifestPlaceholders["msalRedirectScheme"] = "msal$appClientId"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

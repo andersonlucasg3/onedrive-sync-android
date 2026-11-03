@@ -9,9 +9,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.anderson.onedrivesync.App
 import com.anderson.onedrivesync.R
 import com.anderson.onedrivesync.auth.AuthManager
-import com.anderson.onedrivesync.core.DEFAULT_TENANT
 import com.anderson.onedrivesync.core.Prefs
-import com.anderson.onedrivesync.core.normalizeTenant
 import com.anderson.onedrivesync.db.ConflictsDao
 import com.anderson.onedrivesync.db.Db
 import com.anderson.onedrivesync.db.LogDao
@@ -57,7 +55,6 @@ data class DiagnosticsUiState(
 data class SettingsUiState(
     val syncIntervalMinutes: Int = 30,
     val wifiOnly: Boolean = false,
-    val tenant: String = DEFAULT_TENANT,
     val checklist: HyperOsPermissions.Checklist = HyperOsPermissions.Checklist(
         allFiles = false,
         notifications = false,
@@ -86,7 +83,6 @@ class SettingsViewModel(
         SettingsUiState(
             syncIntervalMinutes = prefs.syncIntervalMinutes,
             wifiOnly = prefs.wifionly,
-            tenant = prefs.tenant,
         ),
     )
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
@@ -111,13 +107,6 @@ class SettingsViewModel(
     fun setWifiOnly(enabled: Boolean) {
         prefs.wifionly = enabled
         _state.update { it.copy(wifiOnly = enabled) }
-    }
-
-    /** Also normalizes, so the stored value and the field never stay blank. */
-    fun setTenant(value: String) {
-        val normalized = normalizeTenant(value)
-        prefs.tenant = normalized
-        _state.update { it.copy(tenant = normalized) }
     }
 
     fun refreshChecklist() {

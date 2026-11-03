@@ -31,12 +31,31 @@
             android:name=".ui.MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.OneDriveSync">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Authorization Code + PKCE: the browser returns msal<clientId>://auth. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="auth"
+                    android:scheme="${msalRedirectScheme}" />
+            </intent-filter>
         </activity>
+
+        <!-- In-app WebView for the Authorization Code + PKCE sign-in: never exported. -->
+        <activity
+            android:name=".ui.auth.AuthWebViewActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.OneDriveSync" />
 
         <service
             android:name=".work.SyncService"

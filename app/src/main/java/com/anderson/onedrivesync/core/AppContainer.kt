@@ -45,8 +45,8 @@ class AppContainer(context: Context) {
     val authManager: AuthManager by lazy {
         AuthManager(
             clientId = { BuildConfig.DEFAULT_CLIENT_ID },
-            tenant = { prefs.tenant },
             tokens = tokenStore,
+            pkce = prefs,
             http = okHttpClient,
         )
     }

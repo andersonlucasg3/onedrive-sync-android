@@ -47,12 +47,12 @@ O app também checa atualizações sozinho (1x/dia) e no botão "Buscar atualiza
 ## Configuração
 
 1. (Opcional) Registre um app próprio no Entra ID seguindo [`docs/APP-REGISTRATION.md`](docs/APP-REGISTRATION.md)
-   (device code flow, sem redirect URI; permissão delegada `Files.ReadWrite.All`).
-2. Em **Configurações → Conta**, ajuste o **Diretório (tenant)** se o seu registro não for
-   `consumers` (o padrão). O Client ID já vem embutido no APK.
-3. Toque em **Entrar com Microsoft**: o app mostra um código de 8 caracteres; digite-o em
-   <https://microsoft.com/devicelogin> e autorize.
-4. Crie um par em **Pares → Novo par**: escolha a pasta remota (navegando pelo OneDrive) e a pasta
+   (login Authorization Code + PKCE no WebView, device code como alternativa; permissão delegada
+   `Files.ReadWrite.All`).
+2. Toque em **Entrar com Microsoft** e conclua o login na tela do app. Se a Microsoft bloquear o
+   navegador embutido, use **Entrar com código**: o app mostra um código de 8 caracteres para
+   digitar em <https://microsoft.com/devicelogin>.
+3. Crie um par em **Pares → Novo par**: escolha a pasta remota (navegando pelo OneDrive) e a pasta
    local, confirme e sincronize.
 
 ## Como funciona (resumo técnico)

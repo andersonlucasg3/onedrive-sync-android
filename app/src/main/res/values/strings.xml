@@ -61,10 +61,12 @@
     <string name="perm_autostart_desc">Depois de reiniciar o celular, o HyperOS bloqueia a inicialização do app. Liberar aqui mantém o sync agendado.</string>
 
     <!-- Conta Microsoft -->
-    <string name="auth_tenant_label">Diretório (tenant)</string>
-    <string name="auth_tenant_hint">consumers para app de contas pessoais, common para app multi-tenant, ou o ID/domínio do diretório. Salvo ao sair do campo.</string>
-    <string name="auth_tenant_save">Salvar diretório</string>
     <string name="auth_sign_in">Entrar com Microsoft</string>
+    <string name="auth_sign_in_code">Entrar com código</string>
+    <string name="auth_webview_title">Entrar com Microsoft</string>
+    <string name="auth_webview_close">Fechar</string>
+    <string name="auth_webview_fallback">Problemas? Entrar com código</string>
+    <string name="auth_webview_blocked">A Microsoft bloqueou o login neste navegador — use Entrar com código.</string>
     <string name="auth_sign_out">Sair</string>
     <string name="auth_connected">Conectado</string>
     <string name="auth_connected_hint">Sua conta do OneDrive está autorizada.</string>

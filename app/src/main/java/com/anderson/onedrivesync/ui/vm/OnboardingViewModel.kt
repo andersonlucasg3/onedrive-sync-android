@@ -9,9 +9,6 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.anderson.onedrivesync.App
 import com.anderson.onedrivesync.auth.AuthManager
 import com.anderson.onedrivesync.auth.AuthState
-import com.anderson.onedrivesync.core.DEFAULT_TENANT
-import com.anderson.onedrivesync.core.Prefs
-import com.anderson.onedrivesync.core.normalizeTenant
 import com.anderson.onedrivesync.hyperos.HyperOsPermissions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,7 +26,6 @@ data class OnboardingUiState(
         autostart = false,
     ),
     val signedIn: Boolean = false,
-    val tenant: String = DEFAULT_TENANT,
 ) {
     val canContinue: Boolean get() = checklist.allFiles && signedIn
 }
@@ -41,9 +37,8 @@ data class OnboardingUiState(
 class OnboardingViewModel(
     private val context: Context,
     private val auth: AuthManager,
-    private val prefs: Prefs,
 ) : ViewModel() {
-    private val _state = MutableStateFlow(OnboardingUiState(tenant = prefs.tenant))
+    private val _state = MutableStateFlow(OnboardingUiState())
     val state: StateFlow<OnboardingUiState> = _state.asStateFlow()
 
     init {
@@ -62,13 +57,6 @@ class OnboardingViewModel(
         }
     }
 
-    /** Same normalization as Settings: the tenant never stays blank. */
-    fun setTenant(value: String) {
-        val normalized = normalizeTenant(value)
-        prefs.tenant = normalized
-        _state.update { it.copy(tenant = normalized) }
-    }
-
     private suspend fun applySignedIn(authState: AuthState) {
         val signedIn = authState is AuthState.SignedIn ||
             withContext(Dispatchers.IO) { auth.isSignedIn() }
@@ -79,7 +67,7 @@ class OnboardingViewModel(
         fun factory(context: Context): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = context.applicationContext as App
-                OnboardingViewModel(app, app.container.authManager, app.container.prefs)
+                OnboardingViewModel(app, app.container.authManager)
             }
         }
     }

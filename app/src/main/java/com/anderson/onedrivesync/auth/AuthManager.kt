@@ -1,13 +1,15 @@
 package com.anderson.onedrivesync.auth
 
-import com.anderson.onedrivesync.core.DEFAULT_TENANT
-import com.anderson.onedrivesync.core.normalizeTenant
+import android.net.Uri
 import java.util.concurrent.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -24,8 +26,8 @@ import okhttp3.Request
 
 class AuthManager(
     private val clientId: () -> String?,
-    private val tenant: () -> String = { DEFAULT_TENANT },
     private val tokens: TokenStorage,
+    private val pkce: PkceStorage,
     private val http: OkHttpClient = OkHttpClient(),
     private val authBase: String = DEFAULT_AUTH_BASE,
 ) {
@@ -35,6 +37,9 @@ class AuthManager(
 
     @Volatile
     private var cancelled = false
+
+    /** Outlives the WebView activity: finishing the browser must not cancel the token exchange. */
+    private val interactiveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     internal var delayFn: suspend (Long) -> Unit = { delay(it) }
     internal var clock: () -> Long = { System.currentTimeMillis() }
@@ -69,6 +74,69 @@ class AuthManager(
         } catch (e: Exception) {
             fail(e.message.orEmpty())
         }
+    }
+
+    /**
+     * Persists the PKCE verifier/state and returns the URL the WebView must load. Returns null when
+     * the client id is missing, in which case the state already carries the error.
+     */
+    fun beginInteractiveSignIn(): String? {
+        val cid = clientId()?.trim().orEmpty()
+        if (cid.isEmpty()) {
+            _state.value = AuthState.Error("Client ID não configurado")
+            return null
+        }
+        // A new attempt replaces an abandoned one: the saved verifier must match this URL.
+        val verifier = newVerifier()
+        val state = newState()
+        pkce.savePkce(PendingPkce(verifier, state, clock()))
+        _state.value = AuthState.SignedOut
+        return authorizeUrl(cid, DEFAULT_REDIRECT_URI, verifier, state)
+    }
+
+    /** Fire-and-forget variant used by the WebView and by the custom-scheme intent filter. */
+    fun completeInteractiveSignInInBackground(uri: Uri) {
+        interactiveScope.launch {
+            try {
+                completeInteractiveSignIn(uri)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Nobody awaits this coroutine: an uncaught failure would crash the process.
+                _state.value = AuthState.Error(e.message?.takeIf { it.isNotBlank() } ?: "Falha ao concluir o login")
+            }
+        }
+    }
+
+    suspend fun completeInteractiveSignIn(uri: Uri): Result<Unit> =
+        completeInteractiveSignIn(parseRedirect(uri))
+
+    internal suspend fun completeInteractiveSignIn(redirect: RedirectResult): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            val pending = pkce.loadPkce() ?: return@withContext fail("Nenhum login em andamento")
+            if (clock() - pending.createdAtMs > PKCE_TTL_MS) {
+                pkce.clearPkce()
+                return@withContext fail("Login expirado. Tente novamente.")
+            }
+            // A mismatched state is not ours: keep the pending flow so a forged intent cannot
+            // cancel a sign-in that is still open in the browser.
+            if (redirect.state != pending.state) return@withContext fail("Estado do login não confere")
+            when (redirect) {
+                is RedirectResult.Failure -> {
+                    pkce.clearPkce()
+                    fail(
+                        redirect.errorDescription?.takeIf { it.isNotBlank() }
+                            ?: "Falha na autorização (${redirect.error})",
+                    )
+                }
+
+                is RedirectResult.Success -> exchangeAuthorizationCode(redirect.code, pending.verifier)
+            }
+        }
+
+    fun cancelInteractiveSignIn() {
+        pkce.clearPkce()
+        _state.value = AuthState.SignedOut
     }
 
     suspend fun accessToken(forceRefresh: Boolean = false): String = withContext(Dispatchers.IO) {
@@ -140,6 +208,32 @@ class AuthManager(
         }
     }
 
+    private suspend fun exchangeAuthorizationCode(code: String, verifier: String): Result<Unit> {
+        val cid = clientId()?.trim().orEmpty()
+        if (cid.isEmpty()) return fail("Client ID não configurado")
+        val form = FormBody.Builder()
+            .add("grant_type", AUTHORIZATION_CODE_GRANT)
+            .add("code", code)
+            .add("redirect_uri", DEFAULT_REDIRECT_URI)
+            .add("client_id", cid)
+            .add("code_verifier", verifier)
+            .build()
+        val (status, text) = post(endpoint("token"), form)
+        if (status !in 200..299) {
+            pkce.clearPkce()
+            return fail("Falha ao obter token (HTTP $status): ${errorCode(text) ?: descriptionOf(text) ?: text}")
+        }
+        val token = json.decodeFromString<TokenResponse>(text)
+        if (token.refreshToken == null) {
+            pkce.clearPkce()
+            return fail("Refresh token ausente")
+        }
+        tokens.save(Tokens(token.accessToken, token.refreshToken, clock() + token.expiresIn * 1000))
+        pkce.clearPkce()
+        _state.value = AuthState.SignedIn
+        return Result.success(Unit)
+    }
+
     private suspend fun refresh(refreshToken: String): String {
         val cid = clientId()?.trim().orEmpty()
         if (cid.isEmpty()) throw AuthException("Client ID não configurado")
@@ -170,10 +264,10 @@ class AuthManager(
         return http.newCall(request).execute().use { it.code to it.body.string() }
     }
 
-    // The tenant is editable in Settings while the app runs, so it is resolved per request.
+    // Fixed to "consumers": the embedded registration only accepts personal Microsoft accounts.
     private val authority: HttpUrl
         get() = baseUrl.newBuilder()
-            .addPathSegments("${normalizeTenant(tenant())}/oauth2/v2.0")
+            .addPathSegments("$DEFAULT_TENANT/oauth2/v2.0")
             .build()
 
     private fun endpoint(path: String): HttpUrl =
@@ -195,10 +289,13 @@ class AuthManager(
 
     private companion object {
         const val DEFAULT_AUTH_BASE = "https://login.microsoftonline.com"
+        const val DEFAULT_TENANT = "consumers"
         const val SCOPE = "Files.ReadWrite.All offline_access"
         const val DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+        const val AUTHORIZATION_CODE_GRANT = "authorization_code"
         const val SLOW_DOWN_SECONDS = 5L
         const val REFRESH_SKEW_MS = 5 * 60 * 1000L
+        const val PKCE_TTL_MS = 10 * 60 * 1000L
     }
 }
 
