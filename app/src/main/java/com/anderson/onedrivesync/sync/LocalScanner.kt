@@ -23,6 +23,9 @@ object LocalScanner {
             if (child.name.endsWith(PART_SUFFIX) || Files.isSymbolicLink(child.toPath())) continue
             val relPath = if (prefix.isEmpty()) child.name else "$prefix/${child.name}"
             if (child.isDirectory) {
+                // A directory we cannot list is not treated as empty: indexing it would make the
+                // planner believe its contents were deleted locally.
+                if (child.listFiles() == null) continue
                 out += LocalFile(relPath = relPath, isDir = true, size = 0, mtimeMs = 0, file = child)
                 walk(child, relPath, out)
             } else {
