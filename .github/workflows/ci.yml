@@ -55,7 +55,11 @@ jobs:
           fi
           echo "sdkmanager: $SDKMANAGER"
           yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" "platforms;android-37" "build-tools;37.0.0"
+          "$SDKMANAGER" "build-tools;37.0.0" || true
+          "$SDKMANAGER" "platforms;android-37.0" || "$SDKMANAGER" "platforms;android-37" || {
+            echo "::error::Não foi possível instalar a plataforma android-37.0"
+            exit 1
+          }
 
       - name: gradlew executável
         run: chmod +x gradlew
