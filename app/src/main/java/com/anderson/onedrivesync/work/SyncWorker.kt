@@ -16,6 +16,7 @@ import com.anderson.onedrivesync.db.PendingOp
 import com.anderson.onedrivesync.graph.GraphException
 import com.anderson.onedrivesync.network.isOnWifi
 import com.anderson.onedrivesync.notify.Notifier
+import com.anderson.onedrivesync.sync.CycleResult
 import com.anderson.onedrivesync.sync.SyncEngine
 import com.anderson.onedrivesync.sync.SyncState
 import java.io.IOException
@@ -61,13 +62,18 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         log(container, "início: ${pairs.size} par(es), tentativa ${runAttemptCount + 1}")
         goForeground()
         val result = try {
-            coroutineScope {
+            val cycle = coroutineScope {
                 val progress = launch { engine.state.collect { publishProgress(it) } }
                 try {
                     sync(engine, pairId)
                 } finally {
                     progress.cancel()
                 }
+            }
+            // The engine isolates action failures, so the worker still succeeds; the notification is
+            // the only signal the user gets that part of the cycle did not go through.
+            if (cycle != null && (cycle.failed > 0 || cycle.error != null)) {
+                Notifier.notifyError(applicationContext, cycleFailureMessage(cycle))
             }
             Result.success()
         } catch (e: CancellationException) {
@@ -98,11 +104,11 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun getForegroundInfo(): ForegroundInfo =
         foregroundInfo(applicationContext.getString(R.string.notif_progress_starting), 0, 0)
 
-    private suspend fun sync(engine: SyncEngine, pairId: Long?) {
+    private suspend fun sync(engine: SyncEngine, pairId: Long?): CycleResult? {
         val onNotify: (List<PendingOp>, List<ConflictRow>) -> Unit = { pending, conflicts ->
             Notifier.notifyPending(applicationContext, pending.size, conflicts.size)
         }
-        if (pairId != null) engine.syncPair(pairId, onNotify) else engine.syncAll(onNotify)
+        return if (pairId != null) engine.syncPair(pairId, onNotify) else engine.syncAll(onNotify)
     }
 
     private suspend fun goForeground() {
@@ -127,10 +133,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
     )
 
-    /** The engine reports one step per action, so `done`/`total` are already coarse enough to post. */
+    /** The engine reports one step per phase/action, so `done`/`total` are coarse enough to post. */
     private suspend fun publishProgress(state: SyncState) {
         val running = state as? SyncState.Running ?: return
-        if (running.total <= 0) return
         Notifier.notifyProgress(
             context = applicationContext,
             text = running.step,
@@ -140,6 +145,13 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         )
         setProgress(workDataOf(KEY_DONE to running.done, KEY_TOTAL to running.total, KEY_STEP to running.step))
     }
+
+    private fun cycleFailureMessage(result: CycleResult): String =
+        result.error ?: applicationContext.resources.getQuantityString(
+            R.plurals.notif_cycle_failures,
+            result.failed,
+            result.failed,
+        )
 
     private fun retryOrFail(e: Exception): Result =
         if (runAttemptCount < MAX_RUN_ATTEMPTS) Result.retry() else failWith(e)

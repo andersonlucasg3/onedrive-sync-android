@@ -32,6 +32,8 @@ class GraphClient(
     private val tokenProvider: suspend (forceRefresh: Boolean) -> String,
     graphBaseUrl: String = DEFAULT_GRAPH_BASE,
     private val http: OkHttpClient = defaultHttpClient(),
+    private val log: (String) -> Unit = {},
+    private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
     private val baseUrl: HttpUrl = graphBaseUrl.toHttpUrl()
 
@@ -199,15 +201,30 @@ class GraphClient(
             currentCoroutineContext().ensureActive()
             val response = http.newCall(create(tokenProvider(forceRefresh))).execute()
             if (response.code == 401 && !forceRefresh) {
+                log("HTTP 401: renovando token")
                 response.close()
                 forceRefresh = true
                 continue
             }
             if (response.code == 429 || response.code == 503 || response.code == 504) {
                 if (attempt >= MAX_ATTEMPTS - 1) throw response.graphException()
-                val retryAfterMs = response.header("Retry-After")?.trim()?.toLongOrNull()?.times(1000)
+                val status = response.code
+                val retryAfterSeconds = response.header("Retry-After")?.trim()?.toLongOrNull()
+                val errorCode = response.retryErrorCode()
                 response.close()
-                delay(retryAfterMs ?: RETRY_BACKOFF_MS[attempt])
+                val requestedMs = retryAfterSeconds?.times(1000) ?: RETRY_BACKOFF_MS[attempt]
+                val waitMs = minOf(requestedMs, MAX_RETRY_DELAY_MS)
+                val origin = when {
+                    retryAfterSeconds == null -> "backoff"
+                    requestedMs > MAX_RETRY_DELAY_MS -> "Retry-After de ${retryAfterSeconds}s limitado a 120s"
+                    else -> "Retry-After de ${retryAfterSeconds}s"
+                }
+                val codeSuffix = errorCode?.let { " ($it)" } ?: ""
+                log(
+                    "HTTP $status$codeSuffix: aguardando ${waitMs}ms antes de tentar de novo " +
+                        "(tentativa ${attempt + 1}/$MAX_ATTEMPTS, $origin)",
+                )
+                sleep(waitMs)
                 attempt++
                 continue
             }
@@ -220,6 +237,15 @@ class GraphClient(
 
     private fun authorized(url: HttpUrl, token: String): Request.Builder =
         Request.Builder().url(url).header("Authorization", "Bearer $token")
+
+    /** Graph error code of a retryable response, read before the body is discarded. */
+    private fun Response.retryErrorCode(): String? {
+        val text = runCatching { body.string() }.getOrDefault("")
+        return runCatching {
+            graphJson.parseToJsonElement(text).jsonObject["error"]?.jsonObject
+                ?.get("code")?.jsonPrimitive?.contentOrNull
+        }.getOrNull()
+    }
 
     private fun Response.graphException(): GraphException {
         val status = code
@@ -261,6 +287,7 @@ class GraphClient(
         const val CONFLICT_BEHAVIOR = "@microsoft.graph.conflictBehavior"
         const val MAX_PAGES = 50
         const val MAX_ATTEMPTS = 4
+        const val MAX_RETRY_DELAY_MS = 120_000L
         const val DOWNLOAD_CHUNK_BYTES = 256 * 1024
         const val PROGRESS_STEP_BYTES = 1024 * 1024
         const val UPLOAD_CHUNK_BYTES = 10L * 1024 * 1024

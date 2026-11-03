@@ -205,6 +205,53 @@ class GraphClientTest {
     }
 
     @Test
+    fun `429 logs the retry after wait and succeeds`() = runBlocking {
+        val messages = mutableListOf<String>()
+        val waits = mutableListOf<Long>()
+        val logged = GraphClient(
+            tokenProvider = { "token-1" },
+            graphBaseUrl = server.url("/v1.0").toString(),
+            http = OkHttpClient(),
+            log = { messages += it },
+            sleep = { waits += it },
+        )
+        server.enqueue(MockResponse().setResponseCode(429).setHeader("Retry-After", "1"))
+        server.enqueue(json("""{"displayName":"Ana"}"""))
+
+        val user = logged.me()
+
+        assertEquals("Ana", user.displayName)
+        assertEquals(2, server.requestCount)
+        assertEquals(listOf(1_000L), waits)
+        assertEquals(1, messages.size)
+        assertTrue(messages.single().contains("429"))
+        assertTrue(messages.single().contains("Retry-After"))
+    }
+
+    @Test
+    fun `retry after above the cap is truncated and logged`() = runBlocking {
+        val messages = mutableListOf<String>()
+        val waits = mutableListOf<Long>()
+        val logged = GraphClient(
+            tokenProvider = { "token-1" },
+            graphBaseUrl = server.url("/v1.0").toString(),
+            http = OkHttpClient(),
+            log = { messages += it },
+            sleep = { waits += it },
+        )
+        server.enqueue(MockResponse().setResponseCode(429).setHeader("Retry-After", "9999"))
+        server.enqueue(json("""{"displayName":"Ana"}"""))
+
+        val user = logged.me()
+
+        assertEquals("Ana", user.displayName)
+        assertEquals(2, server.requestCount)
+        assertEquals(listOf(120_000L), waits)
+        assertEquals(1, messages.size)
+        assertTrue(messages.single().contains("limitado a 120s"))
+    }
+
+    @Test
     fun `410 is not retried and exposes location`() {
         server.enqueue(
             MockResponse().setResponseCode(410)

@@ -531,6 +531,100 @@ class SyncEngineTest {
         assertEquals("y", File(root, "b.txt").readText())
     }
 
+    @Test
+    fun `a successful cycle stores a per pair and a global result`() {
+        remote.addFile("a.txt", "conteudo")
+
+        runSync()
+
+        val pairResult = checkNotNull(decodeCycleResult(store.stateOf(CycleResultKeys.pair(PAIR))))
+        assertTrue(pairResult.ok)
+        assertEquals(1, pairResult.downloaded)
+        assertEquals(0, pairResult.uploaded)
+        assertEquals(0, pairResult.failed)
+        assertEquals(NOW, pairResult.finishedAt)
+        assertNull(pairResult.error)
+
+        val global = checkNotNull(decodeCycleResult(store.stateOf(CycleResultKeys.GLOBAL)))
+        assertTrue(global.ok)
+        assertEquals(1, global.downloaded)
+        assertEquals(0, global.uploaded)
+        assertEquals(0, global.failed)
+    }
+
+    @Test
+    fun `an upload cycle counts only uploads in the result`() {
+        runSync()
+        File(root, "novo.txt").writeText("olá")
+
+        runSync()
+
+        val result = checkNotNull(decodeCycleResult(store.stateOf(CycleResultKeys.pair(PAIR))))
+        assertTrue(result.ok)
+        assertEquals(0, result.downloaded)
+        assertEquals(1, result.uploaded)
+        assertEquals(0, result.failed)
+    }
+
+    @Test
+    fun `a cycle with a failed download stores a failed result`() {
+        remote.addFile("a.txt", "conteudo")
+        remote.failNextDownload(remote.idOf("a.txt"))
+
+        runSync()
+
+        val pairResult = checkNotNull(decodeCycleResult(store.stateOf(CycleResultKeys.pair(PAIR))))
+        assertFalse(pairResult.ok)
+        assertTrue(pairResult.failed >= 1)
+        assertEquals(0, pairResult.downloaded)
+
+        val global = checkNotNull(decodeCycleResult(store.stateOf(CycleResultKeys.GLOBAL)))
+        assertFalse(global.ok)
+        assertTrue(global.failed >= 1)
+    }
+
+    @Test
+    fun `a new local file with no remote counterpart is uploaded without a planning hash`() {
+        File(root, "foto.jpg").writeText("foto")
+        File(root, "video.mp4").writeText("video")
+        val counting = CountingLocalFs(fs, remote)
+
+        runBlocking { SyncEngine(store, remote, { counting }, { NOW }).syncPair(PAIR) }
+
+        assertEquals(0, counting.hashesBeforeFirstUpload)
+        assertEquals(
+            setOf("foto.jpg", "video.mp4"),
+            remote.calls.filterIsInstance<FakeRemoteApi.Call.Upload>().map { it.name }.toSet(),
+        )
+    }
+
+    @Test
+    fun `a local file whose size matches the remote one is hashed exactly once`() {
+        remote.addFile("a.txt", "conteudo")
+        File(root, "a.txt").writeText("conteudo")
+        val counting = CountingLocalFs(fs, remote)
+
+        runBlocking { SyncEngine(store, remote, { counting }, { NOW }).syncPair(PAIR) }
+
+        assertEquals(1, counting.hashCalls)
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Upload })
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Download })
+    }
+
+    @Test
+    fun `a local touch with the same size triggers one planning hash`() {
+        remote.addFile("a.txt", "conteudo")
+        runSync()
+        val file = File(root, "a.txt")
+        assertTrue(file.setLastModified(file.lastModified() + 2_000))
+        val counting = CountingLocalFs(fs, remote)
+        remote.clearCalls()
+
+        runBlocking { SyncEngine(store, remote, { counting }, { NOW }).syncPair(PAIR) }
+
+        assertEquals(1, counting.hashesBeforeFirstUpload)
+    }
+
     /** Two pairs over two distinct remote folders and local directories. */
     private class TwoPairs(
         val remote: FakeRemoteApi,
@@ -606,5 +700,23 @@ class SyncEngineTest {
         const val PAIR_B = 8L
         const val NOW = 1_700_000_000_000L
         const val PART_SUFFIX = ".part"
+    }
+}
+
+/** Counts [LocalFs.hash] calls and whether they happened before the first upload reached the fake. */
+private class CountingLocalFs(
+    private val delegate: LocalFs,
+    private val remote: FakeRemoteApi,
+) : LocalFs by delegate {
+    var hashCalls = 0
+        private set
+
+    var hashesBeforeFirstUpload = 0
+        private set
+
+    override fun hash(relPath: String): String {
+        hashCalls++
+        if (remote.calls.none { it is FakeRemoteApi.Call.Upload }) hashesBeforeFirstUpload++
+        return delegate.hash(relPath)
     }
 }

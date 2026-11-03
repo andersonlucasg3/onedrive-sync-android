@@ -38,6 +38,9 @@ class AppContainer(context: Context) {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
+            // Upper bound for a whole call, including body streaming: without it a stuck transfer
+            // hangs forever between reads and the cycle never finishes (no state, no log, no error).
+            .callTimeout(5, TimeUnit.MINUTES)
             .retryOnConnectionFailure(true)
             .build()
     }
@@ -52,7 +55,11 @@ class AppContainer(context: Context) {
     }
 
     val graphClient: GraphClient by lazy {
-        GraphClient(tokenProvider = { forceRefresh -> authManager.accessToken(forceRefresh) }, http = okHttpClient)
+        GraphClient(
+            tokenProvider = { forceRefresh -> authManager.accessToken(forceRefresh) },
+            http = okHttpClient,
+            log = { message -> indexStore.log(System.currentTimeMillis(), "WARN", "Graph", message) },
+        )
     }
 
     val indexStore: IndexStore by lazy { DbIndexStore(db) }

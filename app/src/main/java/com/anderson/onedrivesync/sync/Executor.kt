@@ -6,8 +6,18 @@ import com.anderson.onedrivesync.db.Pair
 import com.anderson.onedrivesync.graph.GraphException
 import kotlin.coroutines.cancellation.CancellationException
 
-/** Outcome of one [Executor.execute] pass. */
-data class ExecStats(val done: Int, val failed: Int)
+/**
+ * Outcome of one [Executor.execute] pass: actions attempted, failures, and how many of the done
+ * actions were transfers/moves/folders, so the cycle summary can separate downloads from uploads.
+ */
+data class ExecStats(
+    val done: Int,
+    val failed: Int,
+    val downloads: Int = 0,
+    val uploads: Int = 0,
+    val moves: Int = 0,
+    val folders: Int = 0,
+)
 
 /**
  * Runs a [Plan] action by action, keeping the index in step with what actually landed on disk and
@@ -40,10 +50,21 @@ class Executor(
         val actions = plan.actions.sortedBy { it.order() }
         var done = 0
         var failed = 0
+        var downloads = 0
+        var uploads = 0
+        var moves = 0
+        var folders = 0
         for (action in actions) {
             try {
                 run(action, pair, view, remoteIds)
                 done++
+                when (action) {
+                    is Action.Download -> downloads++
+                    is Action.Upload -> uploads++
+                    is Action.MoveLocal, is Action.MoveRemote -> moves++
+                    is Action.CreateFolderLocal, is Action.CreateFolderRemote -> folders++
+                    is Action.DeleteLocal, is Action.DeleteRemote -> Unit // never executed here
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -53,7 +74,14 @@ class Executor(
             }
             onProgress(label(action), done + failed, actions.size)
         }
-        return ExecStats(done = done, failed = failed)
+        return ExecStats(
+            done = done,
+            failed = failed,
+            downloads = downloads,
+            uploads = uploads,
+            moves = moves,
+            folders = folders,
+        )
     }
 
     private suspend fun run(action: Action, pair: Pair, view: PairView, remoteIds: MutableMap<String, String>) {

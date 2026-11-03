@@ -19,6 +19,10 @@
     <string name="notif_error_unknown">Falha inesperada na sincronização</string>
     <string name="notif_alerts_title">Ação necessária</string>
     <string name="notif_auth_required">Faça login novamente</string>
+    <plurals name="notif_cycle_failures">
+        <item quantity="one">%1$d ação falhou na sincronização</item>
+        <item quantity="other">%1$d ações falharam na sincronização</item>
+    </plurals>
     <string name="notif_update_title">Atualização disponível: %1$s</string>
     <string name="notif_update_text">Abra Ajustes para baixar e instalar a nova versão.</string>
 
@@ -98,6 +102,18 @@
     <string name="pairs_storage_message">Sem essa permissão o app não consegue ler nem gravar suas pastas.</string>
     <string name="pairs_storage_action">Resolver</string>
     <string name="pairs_action_error">Não foi possível concluir a ação.</string>
+    <string name="pairs_status_never">Nunca sincronizado</string>
+    <string name="pairs_sync_now">Sincronizar agora</string>
+    <string name="pairs_status_ok">Sincronizado %1$s · %2$s</string>
+    <string name="pairs_status_failed">Última sincronização falhou</string>
+    <string name="pairs_syncing">Sincronizando · %1$s</string>
+    <string name="pairs_syncing_progress">Sincronizando · %1$s · %2$d/%3$d</string>
+    <string name="pairs_cycle_failed_title">Último ciclo falhou</string>
+    <string name="pairs_view_activity">Ver Atividade</string>
+    <plurals name="pairs_cycle_failures">
+        <item quantity="one">%1$d ação falhou</item>
+        <item quantity="other">%1$d ações falharam</item>
+    </plurals>
 
     <!-- Assistente de criação de par -->
     <string name="wizard_root">OneDrive (raiz)</string>

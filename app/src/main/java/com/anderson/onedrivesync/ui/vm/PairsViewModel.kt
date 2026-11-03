@@ -14,6 +14,10 @@ import com.anderson.onedrivesync.db.Db
 import com.anderson.onedrivesync.db.Pair
 import com.anderson.onedrivesync.db.PairsDao
 import com.anderson.onedrivesync.db.PendingDao
+import com.anderson.onedrivesync.db.StateDao
+import com.anderson.onedrivesync.sync.CycleResult
+import com.anderson.onedrivesync.sync.CycleResultKeys
+import com.anderson.onedrivesync.sync.decodeCycleResult
 import com.anderson.onedrivesync.work.SyncService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +35,7 @@ data class PairRow(
     val pair: Pair,
     val pendingCount: Int,
     val conflictCount: Int,
+    val result: CycleResult? = null,
 )
 
 data class PairsUiState(
@@ -38,6 +43,7 @@ data class PairsUiState(
     val rows: List<PairRow> = emptyList(),
     val storageGranted: Boolean = false,
     val errorMessage: String? = null,
+    val globalResult: CycleResult? = null,
 )
 
 /**
@@ -59,11 +65,12 @@ class PairsViewModel(
 
     fun reload() {
         viewModelScope.launch {
-            val rows = withContext(Dispatchers.IO) { loadRows() }
+            val loaded = withContext(Dispatchers.IO) { load() }
             _state.update {
                 it.copy(
                     loading = false,
-                    rows = rows,
+                    rows = loaded.rows,
+                    globalResult = loaded.globalResult,
                     storageGranted = Environment.isExternalStorageManager(),
                 )
             }
@@ -75,8 +82,8 @@ class PairsViewModel(
         pollingJob = viewModelScope.launch {
             while (isActive) {
                 delay(POLL_INTERVAL_MS)
-                val rows = withContext(Dispatchers.IO) { loadRows() }
-                _state.update { it.copy(loading = false, rows = rows) }
+                val loaded = withContext(Dispatchers.IO) { load() }
+                _state.update { it.copy(loading = false, rows = loaded.rows, globalResult = loaded.globalResult) }
             }
         }
     }
@@ -119,18 +126,25 @@ class PairsViewModel(
         }
     }
 
-    private fun loadRows(): List<PairRow> {
+    private fun load(): Loaded {
         val database = db.readableDatabase
         val pending = PendingDao.list(database).groupingBy { it.pairId }.eachCount()
         val conflicts = ConflictsDao.list(database).groupingBy { it.pairId }.eachCount()
-        return PairsDao.list(database).map { pair ->
+        val rows = PairsDao.list(database).map { pair ->
             PairRow(
                 pair = pair,
                 pendingCount = pending[pair.id] ?: 0,
                 conflictCount = conflicts[pair.id] ?: 0,
+                result = decodeCycleResult(StateDao.get(database, CycleResultKeys.pair(pair.id))),
             )
         }
+        return Loaded(
+            rows = rows,
+            globalResult = decodeCycleResult(StateDao.get(database, CycleResultKeys.GLOBAL)),
+        )
     }
+
+    private data class Loaded(val rows: List<PairRow>, val globalResult: CycleResult?)
 
     companion object {
         private const val POLL_INTERVAL_MS = 2_000L

@@ -165,6 +165,7 @@ fun AppNavHost(
                     PairsScreen(
                         onNewPair = { navController.navigate(Routes.WIZARD) },
                         onOpenOnboarding = { navController.navigate(Routes.ONBOARDING) },
+                        onOpenActivity = { navController.navigate(Routes.LOG) { launchSingleTop = true } },
                     )
                 }
                 // The notification route only preselects the conflicts tab; the bar keeps one item.

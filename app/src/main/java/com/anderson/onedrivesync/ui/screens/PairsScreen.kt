@@ -1,5 +1,6 @@
 package com.anderson.onedrivesync.ui.screens
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -60,18 +62,24 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.anderson.onedrivesync.App
 import com.anderson.onedrivesync.R
+import com.anderson.onedrivesync.sync.CycleResult
 import com.anderson.onedrivesync.sync.SyncState
 import com.anderson.onedrivesync.ui.components.EmptyState
 import com.anderson.onedrivesync.ui.components.LoadingBox
 import com.anderson.onedrivesync.ui.util.relativeTime
+import com.anderson.onedrivesync.ui.vm.PairProgress
 import com.anderson.onedrivesync.ui.vm.PairRow
 import com.anderson.onedrivesync.ui.vm.PairsViewModel
+import com.anderson.onedrivesync.ui.vm.cycleSummaryText
+import com.anderson.onedrivesync.ui.vm.firstErrorLine
+import com.anderson.onedrivesync.ui.vm.pairProgress
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PairsScreen(
     onNewPair: () -> Unit,
     onOpenOnboarding: () -> Unit,
+    onOpenActivity: () -> Unit,
     viewModel: PairsViewModel = viewModel(factory = PairsViewModel.factory(LocalContext.current)),
 ) {
     val context = LocalContext.current
@@ -93,6 +101,12 @@ fun PairsScreen(
     DisposableEffect(viewModel) {
         viewModel.startPolling()
         onDispose { viewModel.stopPolling() }
+    }
+
+    // The cycle writes its result at the end; reload the moment it goes idle instead of waiting for
+    // the next poll tick, so the card updates as soon as the notification disappears.
+    LaunchedEffect(syncState) {
+        if (syncState is SyncState.Idle) viewModel.reload()
     }
 
     LaunchedEffect(state.errorMessage) {
@@ -125,6 +139,11 @@ fun PairsScreen(
         ) {
             if (!state.storageGranted) {
                 StorageBanner(onOpenOnboarding = onOpenOnboarding)
+            }
+            val failedCycle = state.globalResult?.takeIf { !it.ok || it.failed > 0 || it.error != null }
+            when {
+                running != null -> CycleRunningBanner(running = running)
+                failedCycle != null -> CycleFailedBanner(result = failedCycle, onOpenActivity = onOpenActivity)
             }
             when {
                 state.loading -> Box(
@@ -220,6 +239,7 @@ private fun PairCard(
     onDelete: () -> Unit,
 ) {
     val pair = row.pair
+    val progress = pairProgress(pair.lastSyncAt, row.result, running)
     var menuOpen by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
 
@@ -292,38 +312,23 @@ private fun PairCard(
                 }
             }
 
-            Text(
-                text = stringResource(
-                    R.string.pairs_last_sync,
-                    relativeTime(nowMs = System.currentTimeMillis(), thenMs = pair.lastSyncAt),
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            if (running != null) {
-                if (running.total > 0) {
-                    LinearProgressIndicator(
-                        progress = { running.done.toFloat() / running.total },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                } else {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
-                Text(
-                    text = "${running.done}/${running.total} · ${running.step}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            PairProgressLine(progress = progress)
 
             Button(
                 onClick = onSync,
-                enabled = pair.enabled && running == null,
+                enabled = pair.enabled && progress !is PairProgress.Running,
             ) {
                 Icon(Icons.Filled.Refresh, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.pairs_sync))
+                Text(
+                    stringResource(
+                        when (progress) {
+                            PairProgress.Never -> R.string.pairs_sync_now
+                            is PairProgress.Failed -> R.string.common_try_again
+                            else -> R.string.pairs_sync
+                        },
+                    ),
+                )
             }
         }
     }
@@ -347,6 +352,149 @@ private fun PairCard(
                 }
             },
         )
+    }
+}
+
+/** Green is not part of the (dynamic) color scheme, so a fixed pair of tones keeps "ok" readable. */
+private val SyncOkGreenLight = Color(0xFF2E7D32)
+private val SyncOkGreenDark = Color(0xFF81C784)
+
+@Composable
+private fun PairProgressLine(progress: PairProgress) {
+    when (progress) {
+        PairProgress.Never -> Text(
+            text = stringResource(R.string.pairs_status_never),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        is PairProgress.Running -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (progress.total > 0) {
+                LinearProgressIndicator(
+                    progress = { progress.done.toFloat() / progress.total },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            Text(
+                text = if (progress.total > 0) {
+                    stringResource(R.string.pairs_syncing_progress, progress.step, progress.done, progress.total)
+                } else {
+                    stringResource(R.string.pairs_syncing, progress.step)
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        is PairProgress.Ok -> Text(
+            text = stringResource(
+                R.string.pairs_status_ok,
+                relativeTime(nowMs = System.currentTimeMillis(), thenMs = progress.result.finishedAt),
+                cycleSummaryText(progress.result),
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (isSystemInDarkTheme()) SyncOkGreenDark else SyncOkGreenLight,
+        )
+
+        is PairProgress.Failed -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = stringResource(R.string.pairs_status_failed),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            val detail = firstErrorLine(progress.result)
+            val failed = progress.result?.failed ?: 0
+            when {
+                detail != null -> Text(
+                    text = detail,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                failed > 0 -> Text(
+                    text = pluralStringResource(R.plurals.pairs_cycle_failures, failed, failed),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CycleRunningBanner(running: SyncState.Running) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, top = 12.dp, end = 16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Text(
+            text = if (running.total > 0) {
+                stringResource(R.string.pairs_syncing_progress, running.step, running.done, running.total)
+            } else {
+                stringResource(R.string.pairs_syncing, running.step)
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+    }
+}
+
+@Composable
+private fun CycleFailedBanner(result: CycleResult, onOpenActivity: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, top = 12.dp, end = 16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 12.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.pairs_cycle_failed_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                val detail = firstErrorLine(result)
+                val failed = result.failed
+                when {
+                    detail != null -> Text(
+                        text = detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+
+                    failed > 0 -> Text(
+                        text = pluralStringResource(R.plurals.pairs_cycle_failures, failed, failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+            TextButton(onClick = onOpenActivity) {
+                Text(stringResource(R.string.pairs_view_activity))
+            }
+        }
     }
 }
 

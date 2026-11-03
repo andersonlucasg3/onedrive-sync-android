@@ -13,6 +13,7 @@ import com.anderson.onedrivesync.core.AppContainer
 import com.anderson.onedrivesync.db.ConflictRow
 import com.anderson.onedrivesync.db.PendingOp
 import com.anderson.onedrivesync.notify.Notifier
+import com.anderson.onedrivesync.sync.CycleResult
 import com.anderson.onedrivesync.sync.SyncEngine
 import com.anderson.onedrivesync.sync.SyncState
 import kotlin.coroutines.cancellation.CancellationException
@@ -81,10 +82,15 @@ class SyncService : Service() {
             coroutineScope {
                 val progress = launch { engine.state.collect { publish(it) } }
                 try {
-                    if (allPairs) {
+                    val cycle = if (allPairs) {
                         engine.syncAll(::onPending)
                     } else {
                         engine.syncPair(pairId, ::onPending)
+                    }
+                    // A cycle that ended with failed actions never reaches the exception paths, so
+                    // without this check the only symptom would be a log line nobody reads.
+                    if (cycle != null && (cycle.failed > 0 || cycle.error != null)) {
+                        Notifier.notifyError(this@SyncService, cycleFailureMessage(cycle))
                     }
                 } finally {
                     progress.cancel()
@@ -113,12 +119,16 @@ class SyncService : Service() {
 
     private fun publish(state: SyncState) {
         val running = state as? SyncState.Running ?: return
-        val text = if (running.total > 0) running.step else getString(R.string.notif_progress_starting)
+        // The step is always the phase name now ("lendo OneDrive", "calculando hashes", ...); a zero
+        // total still shows the phase instead of a generic "preparing" for minutes.
         startForeground(
             Notifier.ID_PROGRESS,
-            Notifier.progressNotification(this, text, running.done, running.total, cancelIntent()),
+            Notifier.progressNotification(this, running.step, running.done, running.total, cancelIntent()),
         )
     }
+
+    private fun cycleFailureMessage(result: CycleResult): String =
+        result.error ?: resources.getQuantityString(R.plurals.notif_cycle_failures, result.failed, result.failed)
 
     private fun onPending(pending: List<PendingOp>, conflicts: List<ConflictRow>) {
         Notifier.notifyPending(this, pending.size, conflicts.size)
