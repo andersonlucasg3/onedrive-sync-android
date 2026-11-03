@@ -204,7 +204,10 @@ class SyncEngine(
         var error: String? = null
         var canceled = false
         try {
-            val prev = store.entries(pair.id)
+            // Hidden paths are ignored for this cycle, not removed from the index: an old entry for
+            // `pasta/.oculto` must not turn into a DELETE_* request, and dropping it from the
+            // planning inputs also keeps it out of the remote tree (no hidden folder as a bridge).
+            val prev = store.entries(pair.id).filterNot { isHiddenRelPath(it.relPath) }
 
             _state.value = SyncState.Running(name, "lendo OneDrive", 0, 0, phase = DELTA_PHASE, phases = PHASES)
             val delta = pairDelta(pair)

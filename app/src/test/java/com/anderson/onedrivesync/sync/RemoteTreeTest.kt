@@ -8,6 +8,64 @@ import org.junit.Test
 
 class RemoteTreeTest {
     @Test
+    fun `leaves a hidden remote item out of the map`() {
+        val items = listOf(
+            remote(id = "h1", name = ".hidden", parentId = "root"),
+            remote(id = "f1", name = "visivel.txt", parentId = "root"),
+        )
+
+        val view = RemoteTree.resolve("root", emptyList(), items)
+
+        assertEquals(setOf("visivel.txt"), view.items.keys)
+    }
+
+    @Test
+    fun `a hidden remote folder is dropped with its normal child`() {
+        val items = listOf(
+            remote(id = "t1", name = ".thumbnails", parentId = "root", isDir = true),
+            remote(id = "c1", name = "x.jpg", parentId = "t1"),
+        )
+
+        val view = RemoteTree.resolve("root", emptyList(), items)
+
+        assertTrue(view.items.isEmpty())
+        assertTrue(view.deletedIds.isEmpty())
+    }
+
+    @Test
+    fun `a normal remote folder stays and only its hidden child is dropped`() {
+        val items = listOf(
+            remote(id = "w1", name = "WhatsApp", parentId = "root", isDir = true),
+            remote(id = "c1", name = ".nomedia", parentId = "w1"),
+            remote(id = "c2", name = "foto.jpg", parentId = "w1"),
+        )
+
+        val view = RemoteTree.resolve("root", emptyList(), items)
+
+        assertEquals(setOf("WhatsApp", "WhatsApp/foto.jpg"), view.items.keys)
+    }
+
+    @Test
+    fun `a hidden folder known from the index is no bridge for a new child`() {
+        val prev = listOf(entry(".thumbnails", "t1", isDir = true))
+        val items = listOf(remote(id = "c1", name = "x.jpg", parentId = "t1"))
+
+        val view = RemoteTree.resolve("root", prev, items)
+
+        assertTrue(view.items.isEmpty())
+    }
+
+    @Test
+    fun `an item whose indexed ancestor path is hidden stays out`() {
+        val prev = listOf(entry("WhatsApp/.trash", "t1", isDir = true))
+        val items = listOf(remote(id = "c1", name = "foto.jpg", parentId = "t1"))
+
+        val view = RemoteTree.resolve("root", prev, items)
+
+        assertTrue(view.items.isEmpty())
+    }
+
+    @Test
     fun `resolves a simple tree from out of order items`() {
         val items = listOf(
             remote(id = "f2", name = "b.txt", parentId = "root"),

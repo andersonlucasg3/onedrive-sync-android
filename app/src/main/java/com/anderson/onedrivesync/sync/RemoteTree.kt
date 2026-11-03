@@ -12,6 +12,9 @@ import com.anderson.onedrivesync.db.Entry
  *
  * Items whose ancestry cannot be resolved are left out of [PairView.items]: the caller keeps the
  * previous index for them, they must never look like a deletion.
+ *
+ * Dot items (see [isHiddenName]) are left out of the map too, and a hidden folder is dropped with
+ * its whole subtree: it never becomes a path, so no descendant can resolve through it.
  */
 object RemoteTree {
     private const val MAX_PASSES = 100
@@ -27,10 +30,16 @@ object RemoteTree {
         for (entry in prev) {
             val id = entry.remoteId ?: continue
             if (id == remoteRootId || id in byId || id in deleted || entry.relPath.isEmpty()) continue
+            // A hidden folder must not serve as a bridge: nothing below it belongs to the pair.
+            if (isHiddenRelPath(entry.relPath)) continue
             paths[id] = entry.relPath
         }
 
-        var pending = byId.values.filter { it.id != remoteRootId && it.id !in deleted }
+        // Dot items never get a path, and because a hidden folder never gets one either, its children
+        // stay unresolved below and are dropped with it.
+        var pending = byId.values.filter {
+            it.id != remoteRootId && it.id !in deleted && !isHiddenName(it.name.orEmpty())
+        }
         var pass = 0
         while (pending.isNotEmpty() && pass < MAX_PASSES) {
             val unresolved = ArrayList<RemoteItem>(pending.size)
@@ -52,7 +61,9 @@ object RemoteTree {
 
         val resolved = byId.values.mapNotNull { item ->
             if (item.id == remoteRootId) return@mapNotNull null
-            paths[item.id]?.let { it to item }
+            val path = paths[item.id] ?: return@mapNotNull null
+            if (isHiddenRelPath(path)) return@mapNotNull null
+            path to item
         }.sortedWith(compareBy({ it.first }, { it.second.id }))
 
         // Different items claiming the same path (or paths differing only by case): keep the newest.

@@ -81,6 +81,46 @@ class LocalScannerTest {
     }
 
     @Test
+    fun `scan skips dot files and never descends into a hidden folder`() {
+        val root = Files.createTempDirectory("scanner").toFile()
+        try {
+            File(root, ".nomedia").writeText("x")
+            File(root, ".thumbnails").mkdir()
+            File(root, ".thumbnails/x.jpg").writeText("x")
+            File(root, "sub/.git").mkdirs()
+            File(root, "sub/.git/config").writeText("c")
+            File(root, "sub/ok.txt").writeText("ok")
+            File(root, "visivel.txt").writeText("v")
+
+            val entries = LocalScanner.scan(root)
+
+            assertEquals(listOf("sub", "sub/ok.txt", "visivel.txt"), entries.map { it.relPath })
+            assertTrue(entries.none { it.relPath.contains(".thumbnails") || it.relPath.contains(".git") })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `scan skips a file the OS marks as hidden even with a normal name`() {
+        val root = Files.createTempDirectory("scanner").toFile()
+        try {
+            val hiddenByOs = File(root, "oculto_pelo_sistema.txt").apply { writeText("x") }
+            val marked = runCatching {
+                Files.setAttribute(hiddenByOs.toPath(), "dos:hidden", true)
+            }.isSuccess
+            assumeTrue("cannot set the DOS hidden attribute on this OS", marked)
+            File(root, "ok.txt").writeText("ok")
+
+            val entries = LocalScanner.scan(root)
+
+            assertEquals(listOf("ok.txt"), entries.map { it.relPath })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `scan of a missing root returns empty`() {
         val root = Files.createTempDirectory("scanner").toFile()
         try {

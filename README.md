@@ -19,6 +19,10 @@ segundo plano.
   apagado sem aprovação explícita.
 - **Sync em background**: WorkManager periódico (a cada 15 min, com rede) + sync manual em
   foreground service com progresso na notificação.
+- **Dot files e ocultos ficam fora**: qualquer caminho com um segmento começando em `.`
+  (`.nomedia`, `.thumbnails/…`, `WhatsApp/.trash/…`) não é enviado nem baixado — filtrado na
+  varredura local, na árvore remota e no planejador. O que já existe nos dois lados **não é
+  apagado**, apenas ignorado dali em diante.
 - **Auto-update pelo GitHub**: consulta a última release, baixa o APK e abre o instalador do
   Android (a instalação sempre depende de confirmação do usuário).
 

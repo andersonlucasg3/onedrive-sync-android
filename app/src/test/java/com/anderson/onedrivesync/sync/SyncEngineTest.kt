@@ -333,6 +333,59 @@ class SyncEngineTest {
     }
 
     @Test
+    fun `a hidden remote file is not downloaded`() {
+        remote.addFile(".gitignore", "*.iml\n")
+        remote.addFile("visivel.txt", "ok")
+
+        runSync()
+
+        assertFalse(File(root, ".gitignore").exists())
+        assertEquals(listOf("visivel.txt"), remote.downloads())
+        assertEquals("ok", File(root, "visivel.txt").readText())
+        assertEquals(setOf("visivel.txt"), store.entriesOf(PAIR).map { it.relPath }.toSet())
+    }
+
+    @Test
+    fun `a hidden local file is not uploaded`() {
+        File(root, ".nomedia").writeText("x")
+        File(root, "foto.jpg").writeText("foto")
+
+        runSync()
+
+        assertEquals(listOf("foto.jpg"), remote.calls.filterIsInstance<FakeRemoteApi.Call.Upload>().map { it.name })
+        assertFalse(remote.has(".nomedia"))
+        assertEquals(setOf("foto.jpg"), store.entriesOf(PAIR).map { it.relPath }.toSet())
+    }
+
+    @Test
+    fun `an old index entry for a hidden path queues nothing and is kept`() {
+        // The pair synced `pasta/.oculto` in an older version; the file is gone from both sides now.
+        store.upsertEntry(syncedFileEntry("pasta/.oculto", remoteId = "sumiu"))
+        remote.clearCalls()
+
+        runSync()
+
+        assertTrue(store.pendingOps.isEmpty())
+        assertTrue(store.conflictRows.isEmpty())
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Delete })
+        assertTrue(store.entriesOf(PAIR).any { it.relPath == "pasta/.oculto" })
+    }
+
+    @Test
+    fun `hidden and visible entries sync in the same cycle`() {
+        remote.addFile(".gitignore", "*.iml\n")
+        remote.addFile("remoto.txt", "remoto")
+        File(root, ".nomedia").writeText("x")
+        File(root, "local.txt").writeText("local")
+
+        runSync()
+
+        assertEquals(listOf("remoto.txt"), remote.downloads())
+        assertEquals(listOf("local.txt"), remote.calls.filterIsInstance<FakeRemoteApi.Call.Upload>().map { it.name })
+        assertEquals(setOf("remoto.txt", "local.txt"), store.entriesOf(PAIR).map { it.relPath }.toSet())
+    }
+
+    @Test
     fun `syncAll downloads each pair from its own folder delta`() {
         val two = twoPairs()
 
@@ -913,6 +966,24 @@ class SyncEngineTest {
         isDir = true,
         size = 0,
         mtimeMs = 0,
+        localHash = null,
+        remoteId = remoteId,
+        remoteEtag = null,
+        remoteHash = null,
+        syncedAt = NOW,
+        state = EntryState.SYNCED,
+    )
+
+    /** An index entry the app kept from a cycle that still synced a hidden path. */
+    private fun syncedFileEntry(relPath: String, remoteId: String): Entry = Entry(
+        id = 0,
+        pairId = PAIR,
+        relPath = relPath,
+        parentRel = relPath.substringBeforeLast('/', "").ifEmpty { null },
+        name = relPath.substringAfterLast('/'),
+        isDir = false,
+        size = 1,
+        mtimeMs = NOW,
         localHash = null,
         remoteId = remoteId,
         remoteEtag = null,

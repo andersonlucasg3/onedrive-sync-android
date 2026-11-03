@@ -12,6 +12,20 @@ import org.junit.Test
 
 class PlannerTest {
     @Test
+    fun `never plans an action for a hidden path`() {
+        val plan = plan(
+            prev = listOf(entry("pasta/.oculto", "r1")),
+            view = viewOf(remote("r2", ".gitignore")),
+            local = listOf(local(".nomedia"), local("pasta/.oculto")),
+            hashes = mapOf(".nomedia" to HASH_A, "pasta/.oculto" to HASH_A),
+        )
+
+        assertTrue(plan.actions.isEmpty())
+        assertTrue(plan.pending.isEmpty())
+        assertTrue(plan.conflicts.isEmpty())
+    }
+
+    @Test
     fun `downloads a new remote file`() {
         val plan = plan(view = viewOf(remote("r1", "a.txt", size = 5, quickXorHash = HASH_A)))
 

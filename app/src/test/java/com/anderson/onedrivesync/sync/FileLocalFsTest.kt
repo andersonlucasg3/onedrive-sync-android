@@ -67,6 +67,23 @@ class FileLocalFsTest {
     }
 
     @Test
+    fun `refuses hidden paths and creates no folder`() {
+        val logged = ArrayList<String>()
+        val logging = FileLocalFs(root) { logged += it }
+
+        logging.mkdirs("pasta/.oculto")
+
+        assertFalse(File(root, "pasta").exists())
+        assertThrows(IllegalArgumentException::class.java) { logging.file("pasta/.oculto") }
+        assertThrows(IllegalArgumentException::class.java) { logging.hash(".nomedia") }
+        assertFalse(logging.delete("pasta/.oculto"))
+        assertFalse(logging.move("a.txt", "pasta/.oculto"))
+        assertTrue(logged.isNotEmpty())
+        assertTrue(logged.all { it.startsWith("caminho oculto recusado") })
+        assertTrue(logged.any { it.contains("pasta/.oculto") })
+    }
+
+    @Test
     fun `scan and hash use rel paths`() {
         File(root, "dir").mkdirs()
         File(root, "dir/a.txt").writeText("alfa")

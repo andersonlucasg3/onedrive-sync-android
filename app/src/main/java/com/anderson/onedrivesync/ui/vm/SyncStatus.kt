@@ -84,11 +84,15 @@ fun statusHeadline(status: SyncStatus, now: Long): String = when (status) {
  * Second line of the panel. Running: the counters the step already carries ("página 3 · 600 itens")
  * or "3/10", empty when there is no counter at all. Done: "há 5 min · 12 baixados". Failed: the
  * first line of the error or "N ações falharam".
+ *
+ * While a file operation is on screen, [activeOperationText] already owns the "161/1.962": repeating
+ * it in the detail made the panel show the same counter twice, as if two progresses were running.
  */
 fun statusDetail(status: SyncStatus, now: Long): String = when (status) {
     is SyncStatus.Running -> {
         val counters = status.step.substringAfter(" · ", "").trim()
         when {
+            activeOperationText(status) != null -> ""
             counters.isNotEmpty() -> counters
             status.total > 0 -> "${status.done}/${status.total}"
             else -> ""

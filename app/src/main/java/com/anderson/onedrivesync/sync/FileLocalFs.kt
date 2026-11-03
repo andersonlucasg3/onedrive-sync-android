@@ -9,29 +9,38 @@ import java.io.File
  * Relative paths are normalised per segment. `..`, `.` and absolute paths are rejected so a remote
  * name can never escape [root]; characters OneDrive should never return (`\`, `:`) and empty names
  * are sanitised and reported through [log] instead of failing the whole cycle.
+ *
+ * Dot paths are refused before touching the disk: no hidden folder is ever created and no hidden
+ * file is ever read, written, moved or deleted (defense in depth behind the scan/delta filters).
  */
 class FileLocalFs(
     override val root: File,
     private val log: (String) -> Unit = {},
 ) : LocalFs {
-    override fun file(relPath: String): File = resolve(relPath)
+    override fun file(relPath: String): File {
+        if (refusedHidden(relPath)) throw IllegalArgumentException("hidden path not allowed: '$relPath'")
+        return resolve(relPath)
+    }
 
     override fun exists(relPath: String): Boolean = resolve(relPath).exists()
 
     override fun isDir(relPath: String): Boolean = resolve(relPath).isDirectory
 
     override fun mkdirs(relPath: String) {
+        if (refusedHidden(relPath)) return
         val dir = resolve(relPath)
         if (!dir.isDirectory) dir.mkdirs()
     }
 
     override fun delete(relPath: String): Boolean {
+        if (refusedHidden(relPath)) return false
         val target = resolve(relPath)
         if (target == root) return false
         return if (target.isDirectory) target.deleteRecursively() else target.delete()
     }
 
     override fun move(from: String, to: String): Boolean {
+        if (refusedHidden(from) || refusedHidden(to)) return false
         val source = resolve(from)
         val target = resolve(to)
         if (source == target) return source.exists()
@@ -55,7 +64,16 @@ class FileLocalFs(
 
     override fun scan(): List<LocalFile> = LocalScanner.scan(root)
 
-    override fun hash(relPath: String): String = hashFile(resolve(relPath))
+    override fun hash(relPath: String): String {
+        if (refusedHidden(relPath)) throw IllegalArgumentException("hidden path not allowed: '$relPath'")
+        return hashFile(resolve(relPath))
+    }
+
+    private fun refusedHidden(relPath: String): Boolean {
+        val hidden = isHiddenRelPath(relPath)
+        if (hidden) log("caminho oculto recusado: '$relPath'")
+        return hidden
+    }
 
     private fun resolve(relPath: String): File {
         val raw = relPath.trim()

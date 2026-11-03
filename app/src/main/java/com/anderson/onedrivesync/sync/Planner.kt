@@ -59,6 +59,7 @@ object Planner {
         for (entry in prev.sortedBy { it.relPath }) {
             val remoteId = entry.remoteId ?: continue
             val newPath = movedRemote[remoteId] ?: continue
+            if (isHiddenRelPath(entry.relPath) || isHiddenRelPath(newPath)) continue
             consumed += newPath
             if (!parentMoved(entry, prevByRel, movedRemote)) {
                 actions += Action.MoveLocal(entry.relPath, newPath)
@@ -69,6 +70,7 @@ object Planner {
         val moveTargets = HashSet<String>()
         for (entry in prev.sortedBy { it.relPath }) {
             val remoteId = entry.remoteId ?: continue
+            if (isHiddenRelPath(entry.relPath)) continue
             if (entry.isDir || entry.localHash == null || localMap.containsKey(entry.relPath)) continue
             if (remoteId in movedRemote || remoteId in view.deletedIds) continue
             val atPath = view.items[entry.relPath]?.takeIf { it.id == remoteId }
@@ -84,6 +86,7 @@ object Planner {
                         localHashes[candidate.relPath] == entry.localHash
                 }
                 .minByOrNull { it.relPath } ?: continue
+            if (isHiddenRelPath(target.relPath)) continue
             actions += Action.MoveRemote(entry.relPath, target.relPath, remoteId)
             consumed += entry.relPath
             consumed += target.relPath
@@ -96,6 +99,9 @@ object Planner {
         paths.addAll(localMap.keys)
 
         for (relPath in paths) {
+            // Safety net: whatever escaped the scan and the delta, a hidden path gets no action,
+            // no conflict and no pending deletion.
+            if (isHiddenRelPath(relPath)) continue
             if (relPath in consumed) continue
             val entry = prevByRel[relPath]
             val remote = view.items[relPath]

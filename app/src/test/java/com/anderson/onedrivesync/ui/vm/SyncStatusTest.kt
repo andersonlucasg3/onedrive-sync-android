@@ -100,6 +100,30 @@ class SyncStatusTest {
     }
 
     @Test
+    fun `detail keeps no counter while the active operation line owns it`() {
+        val status = running(
+            step = "enviar WhatsApp/x.jpg",
+            done = 161,
+            total = 1_962,
+            phase = 5,
+            pairName = "WhatsApp Images",
+        )
+
+        assertEquals("", statusDetail(status, NOW))
+        assertEquals("WhatsApp Images · enviando WhatsApp/x.jpg · 161/1.962", activeOperationText(status))
+        assertEquals("", statusDetail(running("baixar Docs/a.txt", done = 1, total = 2, phase = 5), NOW))
+        assertEquals("", statusDetail(running("mover local a.txt → b.txt", done = 1, total = 2, phase = 5), NOW))
+    }
+
+    @Test
+    fun `detail keeps the counter for a folder step with no active operation line`() {
+        val status = running("criar pasta remota Docs", done = 3, total = 10, phase = 5)
+
+        assertNull(activeOperationText(status))
+        assertEquals("3/10", statusDetail(status, NOW))
+    }
+
+    @Test
     fun `detail falls back to done over total`() {
         assertEquals("3/10", statusDetail(running(step = "calculando hashes", done = 3, total = 10), NOW))
     }
