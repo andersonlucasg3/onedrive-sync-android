@@ -89,6 +89,7 @@
     <string name="pairs_empty_action">Criar par</string>
     <string name="pairs_new">Novo par</string>
     <string name="pairs_sync">Sincronizar</string>
+    <string name="pairs_sync_all">Sincronizar tudo</string>
     <string name="pairs_more">Mais opções</string>
     <string name="pairs_disabled">Desativado</string>
     <string name="pairs_enable">Ativar</string>
@@ -103,18 +104,7 @@
     <string name="pairs_storage_action">Resolver</string>
     <string name="pairs_action_error">Não foi possível concluir a ação.</string>
     <string name="pairs_status_never">Nunca sincronizado</string>
-    <string name="pairs_sync_now">Sincronizar agora</string>
-    <string name="pairs_status_ok">Sincronizado %1$s · %2$s</string>
-    <string name="pairs_status_failed">Última sincronização falhou</string>
-    <string name="pairs_syncing">%1$s</string>
-    <string name="pairs_syncing_progress">%1$s · %2$d/%3$d</string>
-    <string name="pairs_syncing_phase">Etapa %1$d de %2$d</string>
-    <string name="pairs_cycle_failed_title">Último ciclo falhou</string>
     <string name="pairs_view_activity">Ver Atividade</string>
-    <plurals name="pairs_cycle_failures">
-        <item quantity="one">%1$d ação falhou</item>
-        <item quantity="other">%1$d ações falharam</item>
-    </plurals>
 
     <!-- Assistente de criação de par -->
     <string name="wizard_root">OneDrive (raiz)</string>
