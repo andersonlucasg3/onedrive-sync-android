@@ -79,11 +79,30 @@ Detalhes de arquitetura, schema e chamadas Graph: [`docs/ARCH.md`](docs/ARCH.md)
 - Conflitos **não** são resolvidos automaticamente — ficam pendentes até o usuário decidir.
 - Pasta movida/renomeada localmente aparece como exclusão + upload (o índice local não identifica
   move de diretório com a mesma confiança que o delta remoto).
+- O cursor de delta é único por drive: ao adicionar um par novo, o ciclo seguinte reenumera o drive
+  inteiro (necessário para o par nascer com conteúdo). Numa janela rara — exclusão remota de outro
+  par ocorrida exatamente entre os dois ciclos — o tombstone pode ser pulado e o arquivo voltar a
+  subir em vez de pedir confirmação de exclusão.
+- Enumeração limitada a 1000 páginas de delta; acima disso o ciclo **não aplica nenhuma ação** e
+  registra `ERROR` no log (evita planejar sobre visão parcial do drive).
 - Android sempre pede confirmação na tela do instalador ao aplicar um update; não há instalação
   silenciosa.
-- R8/minify está desligado (sem device para smoke-testar o APK minificado).
+- R8/minify está desligado (sem device para smoke-testar o APK minificado) — o APK tem ~48 MB
+  porque a biblioteca de ícones inteira vai no pacote.
 - Aviso de update ignora pré-releases: a release `vX.Y.Z-beta.N` é publicada como pré-release e o
   endpoint `/releases/latest` não a retorna — de propósito.
+
+## Diagnóstico (sem ADB)
+
+O app foi feito para ser depurado sem cabo:
+
+- **Ajustes → Diagnóstico**: versão, conta, pares, último sync, tamanho do log, **Testar conexão**
+  (mostra o erro cru do Graph), **Compartilhar logs** e **Forçar sincronização completa**.
+- **Atividade → ícone de compartilhar**: exporta o log completo (o filtro da tela não se aplica)
+  com cabeçalho de versão, aparelho, Android, permissões e estado de autenticação — **sem tokens**
+  (o Client ID aparece mascarado).
+- **Crash**: o stacktrace é gravado em `filesDir/crash/`, entra no log na próxima abertura e, se o
+  banco local estiver corrompido, a tela de erro de inicialização oferece "Compartilhar logs".
 
 ## Build local
 
