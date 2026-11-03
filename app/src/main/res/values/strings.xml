@@ -39,6 +39,12 @@
     <string name="common_back">Voltar</string>
     <string name="common_try_again">Tentar de novo</string>
 
+    <!-- Falha na inicialização -->
+    <string name="startup_error_title">Falha na inicialização</string>
+    <string name="startup_error_message">Não foi possível iniciar: %1$s</string>
+    <string name="startup_error_unknown">erro desconhecido</string>
+    <string name="startup_error_share">Compartilhar logs</string>
+
     <!-- Onboarding -->
     <string name="onboarding_title">Configuração inicial</string>
     <string name="onboarding_intro">O app precisa de duas coisas para funcionar: permissão para ler e gravar arquivos e uma conta Microsoft conectada.</string>

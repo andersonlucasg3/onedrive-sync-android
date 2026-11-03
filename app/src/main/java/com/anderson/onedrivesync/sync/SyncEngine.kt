@@ -119,7 +119,17 @@ class SyncEngine(
             var conflicts = 0
             try {
                 _state.value = SyncState.Scanning
-                val delta = fetchDelta()
+                // The cursor is drive-wide. A pair that never finished a cycle has an empty index,
+                // so a cursor-only delta would leave it empty until something changes remotely.
+                val delta = fetchDelta(forceFull = pairs.any { it.lastSyncAt == null })
+                if (!delta.complete) {
+                    log(
+                        "delta truncado em $MAX_PAGES páginas: drive maior do que o suportado; " +
+                            "nenhuma ação foi aplicada neste ciclo",
+                        level = "ERROR",
+                    )
+                    return@withLock
+                }
                 for (pair in pairs) {
                     val stats = runPair(pair, delta, onNotify)
                     done += stats.done
@@ -181,17 +191,20 @@ class SyncEngine(
         return hashes
     }
 
-    private suspend fun fetchDelta(): DeltaFetch {
-        val cursor = store.getState(KEY_DELTA_LINK)
+    private suspend fun fetchDelta(forceFull: Boolean = false): DeltaFetch {
+        val cursor = if (forceFull) null else store.getState(KEY_DELTA_LINK)
+        if (forceFull) log("par sem sincronização anterior: reenumerando o drive do zero")
+        // A full enumeration is legitimate, not a 410 resync: tombstones that do arrive in the
+        // delta must still produce DELETE_* pending ops, so resync stays false on this path.
         return try {
             val page = pages(cursor)
-            DeltaFetch(page.items, page.deltaLink, resync = false)
+            DeltaFetch(page.items, page.deltaLink, resync = false, complete = page.complete)
         } catch (e: GraphException) {
             if (!e.isGone()) throw e
             log("delta expirou (410 Gone): reenumerando do zero" + (e.code?.let { " (código $it)" } ?: ""))
             store.setState(KEY_DELTA_LINK, null)
             val page = pages(null)
-            DeltaFetch(page.items, page.deltaLink, resync = true)
+            DeltaFetch(page.items, page.deltaLink, resync = true, complete = page.complete)
         }
     }
 
@@ -207,8 +220,10 @@ class SyncEngine(
             if (page.nextLink == null) return Page(items.values.toList(), page.deltaLink)
             next = page.nextLink
         }
-        log("delta truncado em $MAX_PAGES páginas; cursor não avançou")
-        return Page(items.values.toList(), null)
+        // Planning against a partial drive view would invent uploads for items we simply have not
+        // enumerated yet. The cursor stays put so the same range is retried; the log is the only
+        // symptom the user can report.
+        return Page(items.values.toList(), null, complete = false)
     }
 
     private suspend fun keepLocal(pair: Pair, row: ConflictRow): Boolean {
@@ -333,11 +348,18 @@ class SyncEngine(
 
     private fun log(message: String) = store.log(clock(), "WARN", TAG, message)
 
+    private fun log(message: String, level: String) = store.log(clock(), level, TAG, message)
+
     private fun logInfo(message: String) = store.log(clock(), "INFO", TAG, message)
 
-    private class DeltaFetch(val items: List<RemoteItem>, val deltaLink: String?, val resync: Boolean)
+    private class DeltaFetch(
+        val items: List<RemoteItem>,
+        val deltaLink: String?,
+        val resync: Boolean,
+        val complete: Boolean = true,
+    )
 
-    private class Page(val items: List<RemoteItem>, val deltaLink: String?)
+    private class Page(val items: List<RemoteItem>, val deltaLink: String?, val complete: Boolean = true)
 
     /** One pair's share of the cycle: actions executed, failures and queued work. */
     private data class PairStats(val done: Int, val failed: Int, val pending: Int, val conflicts: Int)
@@ -345,7 +367,7 @@ class SyncEngine(
     internal companion object {
         const val TAG = "SyncEngine"
         const val KEY_DELTA_LINK = "delta_link"
-        const val MAX_PAGES = 300
+        const val MAX_PAGES = 1000
     }
 }
 

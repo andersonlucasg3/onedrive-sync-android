@@ -21,6 +21,11 @@ class FakeIndexStore(pairs: List<Pair> = emptyList()) : IndexStore {
 
     fun entriesOf(pairId: Long): List<Entry> = entries.values.filter { it.pairId == pairId }.sortedBy { it.relPath }
 
+    /** Simulates the pair wizard inserting a pair after earlier syncs already advanced the cursor. */
+    fun addPair(pair: Pair) {
+        pairsById[pair.id] = pair
+    }
+
     fun stateOf(key: String): String? = state[key]
 
     override fun listPairs(enabledOnly: Boolean): List<Pair> = pairsById.values.filter { !enabledOnly || it.enabled }

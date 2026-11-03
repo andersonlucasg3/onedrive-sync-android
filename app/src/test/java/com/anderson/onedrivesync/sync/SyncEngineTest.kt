@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -293,6 +294,128 @@ class SyncEngineTest {
         assertEquals("foto", remote.textOf("Fotos/x.txt"))
     }
 
+    @Test
+    fun `syncAll downloads both pairs from one shared enumeration`() {
+        val two = twoPairs()
+
+        two.syncAll()
+
+        assertEquals("alfa", File(two.localA, "a.txt").readText())
+        assertEquals("beta", File(two.localB, "b.txt").readText())
+        assertEquals(1, two.remote.deltaCursors().size)
+    }
+
+    @Test
+    fun `a remote change in the second pair is not swallowed by the shared cursor`() {
+        val two = twoPairs()
+        two.syncAll()
+        two.remote.clearCalls()
+
+        two.remote.addFile("B/b.txt", "beta 2", mtimeMs = 1_700_000_000_000)
+
+        two.syncAll()
+
+        assertEquals("beta 2", File(two.localB, "b.txt").readText())
+        assertEquals(listOf("b.txt"), two.remote.downloads())
+        assertEquals("alfa", File(two.localA, "a.txt").readText())
+    }
+
+    @Test
+    fun `a pair created after the first sync still downloads its files`() {
+        val remote = FakeRemoteApi()
+        val localA = File(root, "a").apply { mkdirs() }
+        val localB = File(root, "b").apply { mkdirs() }
+        val remoteA = remote.addFolder("A")
+        val remoteB = remote.addFolder("B")
+        remote.addFile("A/a.txt", "alfa")
+        remote.addFile("B/b.txt", "beta")
+        val store = FakeIndexStore(listOf(pairOf(PAIR, remoteA, localA)))
+        val engine = engineFor(store, remote)
+
+        runBlocking { engine.syncAll() }
+        assertFalse(File(localB, "b.txt").exists())
+
+        store.addPair(pairOf(PAIR_B, remoteB, localB))
+        remote.clearCalls()
+        runBlocking { engine.syncAll() }
+
+        assertEquals("beta", File(localB, "b.txt").readText())
+        assertEquals(listOf("b.txt"), remote.downloads())
+        // The new pair forced a full enumeration instead of replaying the advanced cursor.
+        assertEquals(listOf<String?>(null), remote.deltaCursors())
+    }
+
+    @Test
+    fun `a forced full cycle saves the cursor and the next cycle transfers nothing`() {
+        val two = twoPairs()
+
+        two.syncAll()
+        assertNotNull(two.store.stateOf(SyncEngine.KEY_DELTA_LINK))
+
+        two.remote.clearCalls()
+        two.syncAll()
+
+        assertEquals(0, two.remote.downloads().size)
+    }
+
+    @Test
+    fun `a remote deletion still queues a local delete after a forced full cycle`() {
+        val two = twoPairs()
+        two.syncAll()
+        two.remote.remove(two.remote.idOf("B/b.txt"))
+        two.remote.clearCalls()
+
+        two.syncAll()
+
+        val op = two.store.pendingOps.single { it.pairId == PAIR_B }
+        assertEquals(PendingKind.DELETE_LOCAL, op.kind)
+        assertEquals("b.txt", op.relPath)
+        assertTrue(File(two.localB, "b.txt").isFile)
+    }
+
+    /** Two pairs over two distinct remote folders and local directories. */
+    private class TwoPairs(
+        val remote: FakeRemoteApi,
+        val store: FakeIndexStore,
+        val engine: SyncEngine,
+        val localA: File,
+        val localB: File,
+    ) {
+        fun syncAll() = runBlocking { engine.syncAll() }
+    }
+
+    private fun twoPairs(): TwoPairs {
+        val remote = FakeRemoteApi()
+        val localA = File(root, "a").apply { mkdirs() }
+        val localB = File(root, "b").apply { mkdirs() }
+        val remoteA = remote.addFolder("A")
+        val remoteB = remote.addFolder("B")
+        remote.addFile("A/a.txt", "alfa")
+        remote.addFile("B/b.txt", "beta")
+        val store = FakeIndexStore(listOf(pairOf(PAIR, remoteA, localA), pairOf(PAIR_B, remoteB, localB)))
+        return TwoPairs(remote, store, engineFor(store, remote), localA, localB)
+    }
+
+    private fun engineFor(store: FakeIndexStore, remote: FakeRemoteApi): SyncEngine =
+        SyncEngine(store, remote, { pair -> FileLocalFs(File(pair.localPath)) }, { NOW })
+
+    private fun pairOf(id: Long, remoteId: String, localDir: File): Pair = Pair(
+        id = id,
+        remoteId = remoteId,
+        remotePath = "/$id",
+        localPath = localDir.absolutePath,
+        displayName = "Teste $id",
+        enabled = true,
+        createdAt = 0,
+        lastSyncAt = null,
+    )
+
+    private fun FakeRemoteApi.downloads(): List<String> =
+        calls.filterIsInstance<FakeRemoteApi.Call.Download>().map { it.name.removeSuffix(PART_SUFFIX) }
+
+    private fun FakeRemoteApi.deltaCursors(): List<String?> =
+        calls.filterIsInstance<FakeRemoteApi.Call.Delta>().map { it.cursor }
+
     /** Syncs an equal path on both sides, then changes both: one unresolved conflict row. */
     private fun createConflict(): Long {
         remote.addFile("a.txt", "remoto")
@@ -320,6 +443,8 @@ class SyncEngineTest {
 
     private companion object {
         const val PAIR = 7L
+        const val PAIR_B = 8L
         const val NOW = 1_700_000_000_000L
+        const val PART_SUFFIX = ".part"
     }
 }
