@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: APK assinado + GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: JDK 21 (temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Android SDK
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK" ]; then
+            echo "ANDROID_SDK_ROOT/ANDROID_HOME não definidos; confiando no SDK da imagem"
+            exit 0
+          fi
+          SDKMANAGER=""
+          for candidate in \
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK/cmdline-tools/bin/sdkmanager" \
+            "$SDK/tools/bin/sdkmanager"; do
+            if [ -x "$candidate" ]; then SDKMANAGER="$candidate"; break; fi
+          done
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager || true)"
+          fi
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::warning::sdkmanager não encontrado em $SDK — seguindo com o SDK da imagem"
+            exit 0
+          fi
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-37" "build-tools;37.0.0"
+
+      - name: gradlew executável
+        run: chmod +x gradlew
+
+      - name: Versão da tag
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF#refs/tags/v}" = "$GITHUB_REF" ]; then
+            echo "::error::Este workflow precisa rodar sobre uma tag 'v*' (ref atual: $GITHUB_REF)"
+            exit 1
+          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          CORE="${VERSION%%-*}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CORE"
+          MAJOR="${MAJOR:-0}"
+          MINOR="${MINOR:-0}"
+          PATCH="${PATCH:-0}"
+          for part in "$MAJOR" "$MINOR" "$PATCH"; do
+            if ! [[ "$part" =~ ^[0-9]+$ ]]; then
+              echo "::error::Tag inválida para versionCode: $GITHUB_REF_NAME"
+              exit 1
+            fi
+          done
+          VCODE=$(( 10#$MAJOR * 10000 + 10#$MINOR * 100 + 10#$PATCH ))
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "VCODE=$VCODE" >> "$GITHUB_ENV"
+          echo "Release: $VERSION (versionCode $VCODE)"
+
+      - name: Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::secret KEYSTORE_BASE64 vazio"
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          if [ ! -s "$RUNNER_TEMP/release.jks" ]; then
+            echo "::error::keystore decodificado está vazio"
+            exit 1
+          fi
+
+      - name: Build APK de release
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in KEYSTORE_PATH KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::secret para $name vazio"
+              exit 1
+            fi
+          done
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace \
+            -PappVersionName="$VERSION" \
+            -PappVersionCode="$VCODE"
+
+      - name: Empacotar e verificar assinatura
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/release/app-release.apk"
+          cp "$APK" "OneDriveSync-${VERSION}.apk"
+          APKSIGNER="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/build-tools/37.0.0/apksigner"
+          if [ -x "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs "OneDriveSync-${VERSION}.apk"
+          else
+            echo "::warning::apksigner 37.0.0 não encontrado para verificar a assinatura"
+          fi
+          ls -lh OneDriveSync-*.apk
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: OneDrive Sync ${{ github.ref_name }}
+          files: OneDriveSync-*.apk
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

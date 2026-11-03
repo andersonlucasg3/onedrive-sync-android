@@ -14,18 +14,34 @@ android {
         applicationId = "com.anderson.onedrivesync"
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // Overridden by CI/Gradle properties: -PappVersionCode / -PappVersionName.
+        // Convention: major*10000 + minor*100 + patch (1.0.0 -> 10000, 1.2.3 -> 10203).
+        versionCode = (findProperty("appVersionCode") as String?)?.toInt() ?: 10000
+        versionName = (findProperty("appVersionName") as String?) ?: "1.0.0-beta.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Release signing is configured only when the keystore is available (locally or in CI).
+    val keystorePath = System.getenv("KEYSTORE_PATH")
+    signingConfigs {
+        if (keystorePath != null) create("release") {
+            storeFile = file(keystorePath)
+            storePassword = System.getenv("KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("KEY_ALIAS")
+            keyPassword = System.getenv("KEY_PASSWORD")
+        }
     }
 
     buildTypes {
         release {
+            // No device available to smoke-test R8 output, so keep minification off.
             isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -36,6 +52,8 @@ android {
 
     buildFeatures {
         compose = true
+        // Settings shows BuildConfig.VERSION_NAME; AGP 9 keeps it off by default.
+        buildConfig = true
     }
 }
 

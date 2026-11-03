@@ -38,6 +38,28 @@ class GraphClientTest {
     }
 
     @Test
+    fun `root item requests drive root and parses the dto`() = runBlocking {
+        server.enqueue(
+            json(
+                """
+                {"id":"ROOT!1","name":"root","folder":{"childCount":3},
+                 "parentReference":{"path":"/drive/root"}}
+                """,
+            ),
+        )
+
+        val item = client.rootItem()
+
+        assertEquals("ROOT!1", item.id)
+        assertEquals("root", item.name)
+        assertEquals(3L, item.folder?.childCount)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/v1.0/me/drive/root", request.path)
+        assertEquals("Bearer token-1", request.headers["Authorization"])
+    }
+
+    @Test
     fun `delta root requests drive root delta`() = runBlocking {
         server.enqueue(json("""{"value":[]}"""))
 

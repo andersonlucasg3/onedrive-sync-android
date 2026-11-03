@@ -2,5 +2,215 @@
 <resources>
     <string name="app_name">OneDrive Sync</string>
     <string name="app_title">OneDrive Sync</string>
-    <string name="app_placeholder">A sincronização será configurada nas próximas etapas.</string>
+
+    <!-- Canais de notificação -->
+    <string name="channel_progress_name">Sincronização em andamento</string>
+    <string name="channel_progress_desc">Progresso da sincronização em segundo plano</string>
+    <string name="channel_result_name">Resultado da sincronização</string>
+    <string name="channel_result_desc">Erros e resultado final da sincronização</string>
+    <string name="channel_alerts_name">Pendências e conflitos</string>
+    <string name="channel_alerts_desc">Conflitos e exclusões que aguardam a sua confirmação</string>
+
+    <!-- Notificações -->
+    <string name="notif_progress_title">Sincronizando</string>
+    <string name="notif_progress_starting">Preparando sincronização…</string>
+    <string name="notif_progress_cancel">Cancelar</string>
+    <string name="notif_error_title">Erro na sincronização</string>
+    <string name="notif_error_unknown">Falha inesperada na sincronização</string>
+    <string name="notif_alerts_title">Ação necessária</string>
+    <string name="notif_auth_required">Faça login novamente</string>
+    <string name="notif_update_title">Atualização disponível: %1$s</string>
+    <string name="notif_update_text">Abra Ajustes para baixar e instalar a nova versão.</string>
+
+    <!-- Navegação -->
+    <string name="nav_pairs">Pares</string>
+    <string name="nav_pending">Pendências</string>
+    <string name="nav_log">Atividade</string>
+    <string name="nav_settings">Ajustes</string>
+    <string name="screen_title_pending">Pendências</string>
+    <string name="screen_title_log">Atividade</string>
+    <string name="screen_title_settings">Ajustes</string>
+
+    <!-- Comum -->
+    <string name="common_open">Abrir</string>
+    <string name="common_allow">Permitir</string>
+    <string name="common_cancel">Cancelar</string>
+    <string name="common_continue">Continuar</string>
+    <string name="common_back">Voltar</string>
+    <string name="common_try_again">Tentar de novo</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_title">Configuração inicial</string>
+    <string name="onboarding_intro">O app precisa de duas coisas para funcionar: permissão para ler e gravar arquivos e uma conta Microsoft conectada.</string>
+    <string name="onboarding_section_permissions">Permissões</string>
+    <string name="onboarding_section_account">Conta Microsoft</string>
+    <string name="onboarding_continue_hint">Libere o acesso aos arquivos e conecte a conta para continuar.</string>
+    <string name="perm_all_files_title">Acesso a todos os arquivos</string>
+    <string name="perm_all_files_desc">As pastas que você sincroniza (DCIM, Downloads, Pictures…) só ficam acessíveis com esta permissão. Sem ela, o app não consegue ler nem gravar nada.</string>
+    <string name="perm_notifications_title">Notificações</string>
+    <string name="perm_notifications_desc">Avisamos quando o sync termina, falha ou encontra um conflito. Sem isso, os problemas só aparecem quando você abre o app.</string>
+    <string name="perm_battery_title">Bateria sem restrição</string>
+    <string name="perm_battery_desc">O HyperOS encerra apps em segundo plano para economizar bateria. Sem a exceção, a sincronização automática para de rodar.</string>
+    <string name="perm_autostart_title">Iniciar automaticamente (MIUI/HyperOS)</string>
+    <string name="perm_autostart_desc">Depois de reiniciar o celular, o HyperOS bloqueia a inicialização do app. Liberar aqui mantém o sync agendado.</string>
+
+    <!-- Conta Microsoft -->
+    <string name="auth_client_id_label">Client ID (Azure)</string>
+    <string name="auth_client_id_hint">Cole o Application (client) ID do app registrado no Azure.</string>
+    <string name="auth_sign_in">Entrar com Microsoft</string>
+    <string name="auth_sign_out">Sair</string>
+    <string name="auth_connected">Conectado</string>
+    <string name="auth_connected_hint">Sua conta do OneDrive está autorizada.</string>
+    <string name="auth_pending_title">Código do dispositivo</string>
+    <string name="auth_pending_instructions">Abra microsoft.com/devicelogin e informe este código para autorizar o app:</string>
+    <string name="auth_copy_code">Copiar código</string>
+    <string name="auth_copied">Código copiado.</string>
+    <string name="auth_cancel">Cancelar</string>
+    <string name="auth_error_title">Falha ao entrar</string>
+    <string name="auth_required">Sua sessão expirou. Entre novamente.</string>
+
+    <!-- Pares -->
+    <string name="pairs_title">Pastas sincronizadas</string>
+    <string name="pairs_empty_title">Nenhuma pasta sincronizada</string>
+    <string name="pairs_empty_message">Escolha uma pasta no OneDrive e uma no celular para começar.</string>
+    <string name="pairs_empty_action">Criar par</string>
+    <string name="pairs_new">Novo par</string>
+    <string name="pairs_sync">Sincronizar</string>
+    <string name="pairs_more">Mais opções</string>
+    <string name="pairs_disabled">Desativado</string>
+    <string name="pairs_enable">Ativar</string>
+    <string name="pairs_disable">Desativar</string>
+    <string name="pairs_delete">Remover par</string>
+    <string name="pairs_last_sync">Última sincronização: %1$s</string>
+    <string name="pairs_delete_title">Remover par?</string>
+    <string name="pairs_delete_message">O par %1$s e o histórico dele serão apagados. Nenhum arquivo, local ou no OneDrive, é excluído.</string>
+    <string name="pairs_delete_confirm">Remover</string>
+    <string name="pairs_storage_title">Acesso aos arquivos desativado</string>
+    <string name="pairs_storage_message">Sem essa permissão o app não consegue ler nem gravar suas pastas.</string>
+    <string name="pairs_storage_action">Resolver</string>
+    <string name="pairs_action_error">Não foi possível concluir a ação.</string>
+
+    <!-- Assistente de criação de par -->
+    <string name="wizard_root">OneDrive (raiz)</string>
+    <string name="wizard_title_remote">Pasta no OneDrive</string>
+    <string name="wizard_title_local">Pasta no celular</string>
+    <string name="wizard_title_confirm">Confirmar par</string>
+    <string name="wizard_up">Subir um nível</string>
+    <string name="wizard_use_remote">Usar esta pasta</string>
+    <string name="wizard_use_local">Usar esta pasta</string>
+    <string name="wizard_empty_title">Nenhuma subpasta</string>
+    <string name="wizard_remote_empty_message">Crie uma pasta no OneDrive para sincronizá-la.</string>
+    <string name="wizard_local_empty_message">Esta pasta do celular não tem subpastas.</string>
+    <string name="wizard_remote_error">Não foi possível listar a pasta do OneDrive.</string>
+    <string name="wizard_local_error">Não foi possível ler esta pasta.</string>
+    <string name="wizard_open_settings">Abrir Ajustes</string>
+    <string name="wizard_name_label">Nome do par</string>
+    <string name="wizard_remote_label">OneDrive</string>
+    <string name="wizard_local_label">Celular</string>
+    <string name="wizard_merge_warning">Esta pasta já tem arquivos. Eles serão mesclados com o conteúdo do OneDrive; nada é apagado nesta etapa.</string>
+    <string name="wizard_create">Criar e sincronizar</string>
+    <string name="wizard_creating">Criando…</string>
+    <string name="wizard_create_error">Não foi possível criar o par.</string>
+
+    <!-- Pendências: conflitos e exclusões -->
+    <string name="pending_tab_conflicts">Conflitos</string>
+    <string name="pending_tab_deletions">Exclusões</string>
+    <string name="pending_refresh">Atualizar</string>
+    <string name="pending_conflict_local">Local: %1$s · %2$s</string>
+    <string name="pending_conflict_remote">OneDrive: %1$s · %2$s</string>
+    <string name="pending_keep_local">Manter local</string>
+    <string name="pending_keep_remote">Manter OneDrive</string>
+    <string name="pending_keep_both">Manter os dois</string>
+    <string name="pending_keep_local_title">Manter a versão local?</string>
+    <string name="pending_keep_local_message">O arquivo do celular será enviado ao OneDrive e substituirá a versão que está lá.</string>
+    <string name="pending_keep_remote_title">Manter a versão do OneDrive?</string>
+    <string name="pending_keep_remote_message">O arquivo do OneDrive será baixado e substituirá o arquivo do celular.</string>
+    <string name="pending_keep_both_title">Manter as duas versões?</string>
+    <string name="pending_keep_both_message">O arquivo local será renomeado com o sufixo &quot;(conflito)&quot; e a versão do OneDrive será baixada com o nome original.</string>
+    <string name="pending_conflicts_empty_title">Nenhum conflito</string>
+    <string name="pending_conflicts_empty_message">Nada aguardando decisão. Os arquivos das suas pastas estão sincronizados.</string>
+    <string name="pending_deletions_empty_title">Nenhuma exclusão pendente</string>
+    <string name="pending_deletions_empty_message">Exclusões feitas no celular ou no OneDrive aparecem aqui para confirmação.</string>
+    <string name="pending_delete_local_label">Excluir no celular</string>
+    <string name="pending_delete_remote_label">Excluir no OneDrive</string>
+    <string name="pending_approve">Aprovar</string>
+    <string name="pending_ignore">Ignorar</string>
+    <string name="pending_approve_all">Aprovar todas</string>
+    <string name="pending_approve_all_title">Aprovar todas as exclusões?</string>
+    <string name="pending_approve_all_message">%1$d exclusões serão apagadas de forma permanente. Essa ação não pode ser desfeita.</string>
+    <string name="pending_approve_all_confirm">Aprovar todas</string>
+    <string name="pending_approve_all_error">%1$d exclusões não puderam ser aprovadas.</string>
+    <string name="pending_resolve_failed">Não foi possível resolver este conflito.</string>
+    <string name="pending_action_error">Não foi possível concluir a ação.</string>
+
+    <!-- Atividade (log) -->
+    <string name="log_search">Buscar por tag ou mensagem</string>
+    <string name="log_level_all">Todos</string>
+    <string name="log_level_info">INFO</string>
+    <string name="log_level_warn">WARN</string>
+    <string name="log_level_error">ERROR</string>
+    <string name="log_copy">Copiar</string>
+    <string name="log_copied">Log copiado.</string>
+    <string name="log_clear">Limpar log</string>
+    <string name="log_clear_title">Limpar log?</string>
+    <string name="log_clear_message">Todo o histórico de atividades será apagado.</string>
+    <string name="log_clear_confirm">Limpar</string>
+    <string name="log_empty_title">Nenhuma atividade</string>
+    <string name="log_empty_message">Avisos e erros da sincronização aparecem aqui.</string>
+    <string name="log_no_results_title">Nada encontrado</string>
+    <string name="log_no_results_message">Nenhuma linha corresponde ao filtro ou à busca.</string>
+    <string name="log_error">Não foi possível carregar o log.</string>
+    <string name="log_share">Compartilhar</string>
+    <string name="log_share_title">Compartilhar log</string>
+    <string name="log_share_subject">Logs do OneDrive Sync</string>
+    <string name="log_share_done">Log completo exportado. O filtro e a busca da tela não são aplicados ao arquivo.</string>
+    <string name="log_share_error">Não foi possível exportar o log.</string>
+
+    <!-- Ajustes -->
+    <string name="settings_account_title">Conta</string>
+    <string name="settings_sync_title">Sincronização</string>
+    <string name="settings_interval">Intervalo</string>
+    <string name="settings_interval_minutes">%1$d min</string>
+    <string name="settings_interval_hours">%1$d h</string>
+    <string name="settings_wifi_only">Sincronizar apenas no Wi-Fi</string>
+    <string name="settings_wifi_only_hint">A sincronização automática espera por uma rede Wi-Fi.</string>
+    <string name="settings_permissions_title">Permissões (HyperOS)</string>
+    <string name="settings_advanced_title">Avançado</string>
+    <string name="settings_sync_now">Sincronizar agora</string>
+    <string name="settings_cancel_sync">Cancelar sincronização</string>
+    <string name="settings_reschedule">Recriar agendamento</string>
+    <string name="settings_about_title">Sobre</string>
+    <string name="settings_version">Versão %1$s</string>
+    <string name="settings_repo_url" translatable="false">https://github.com/andersonlucasg3/onedrive-sync-android</string>
+
+    <!-- Diagnóstico -->
+    <string name="settings_diagnostics_title">Diagnóstico</string>
+    <string name="settings_diag_account">Conta: %1$s</string>
+    <string name="settings_diag_signed_in">conectada</string>
+    <string name="settings_diag_signed_out">não conectada</string>
+    <string name="settings_diag_pairs">Pares: %1$d</string>
+    <string name="settings_diag_pair_last_sync">%1$s — %2$s</string>
+    <string name="settings_diag_pending">Pendências: %1$d · conflitos: %2$d</string>
+    <string name="settings_diag_log">Log: %1$d linhas</string>
+    <string name="settings_diag_test">Testar conexão</string>
+    <string name="settings_diag_testing">Testando…</string>
+    <string name="settings_diag_connection_ok">Conectado como %1$s</string>
+    <string name="settings_diag_share">Compartilhar logs</string>
+    <string name="settings_diag_full_resync">Forçar sincronização completa</string>
+    <string name="settings_diag_resync_title">Sincronizar tudo de novo?</string>
+    <string name="settings_diag_resync_message">O próximo sync vai reenumerar o OneDrive inteiro em vez de usar o delta incremental. Pode demorar mais; nenhum arquivo é apagado.</string>
+    <string name="settings_diag_resync_confirm">Sincronizar tudo</string>
+
+    <!-- Atualizações -->
+    <string name="settings_updates_title">Atualizações</string>
+    <string name="settings_updates_current">Versão atual: %1$s</string>
+    <string name="settings_updates_check">Verificar atualização</string>
+    <string name="settings_updates_checking">Verificando…</string>
+    <string name="settings_updates_up_to_date">Você está na versão mais recente.</string>
+    <string name="settings_updates_available">Versão %1$s disponível</string>
+    <string name="settings_updates_download">Baixar e instalar</string>
+    <string name="settings_updates_downloading">Baixando… %1$d%%</string>
+    <string name="settings_updates_installing">Abrindo o instalador…</string>
+    <string name="settings_updates_error">Não foi possível verificar atualizações.</string>
+    <string name="settings_error">Não foi possível concluir a ação.</string>
 </resources>

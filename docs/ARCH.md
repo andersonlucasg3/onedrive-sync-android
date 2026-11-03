@@ -185,16 +185,52 @@ Concorrência: uma sincronização por vez (Mutex em `SyncEngine`); UI observa v
 
 Repo público: `github.com/andersonlucasg3/onedrive-sync-android`.
 
-- Releases com tag `vX.Y.Z` e asset `OneDriveSync-vX.Y.Z.apk`. `versionCode = major*10000 + minor*100 + patch`.
+- Releases com tag `vX.Y.Z` e asset `OneDriveSync-X.Y.Z.apk` (o `v` da tag sai do nome do arquivo).
+- `versionCode = major*10000 + minor*100 + patch` (1.0.0 → 10000, 1.2.3 → 10203); sufixo de
+  pré-release (`-beta.1`) não entra no `versionCode`. `versionName`/`versionCode` vêm das
+  propriedades `-PappVersionName`/`-PappVersionCode`, com defaults `1.0.0-beta.1`/`10000`.
 - App consulta `https://api.github.com/repos/andersonlucasg3/onedrive-sync-android/releases/latest`
   (sem token, 60 req/h), compara `tag_name` com a versão instalada.
-- Se houver versão nova: baixa o asset para `cacheDir/update.apk`, confere `size` e o
-  `digest` sha256 do asset quando presente, e dispara o instalador
-  (`ACTION_VIEW` + FileProvider + `REQUEST_INSTALL_PACKAGES`, `FLAG_GRANT_READ_URI_PERMISSION`).
+- **`/releases/latest` ignora pré-releases.** A beta é publicada com `prerelease: true` (tag com
+  `-`), então instalação manual da beta não é avisada de novas betas — comportamento desejado:
+  só releases estáveis notificam update.
+- Se houver versão nova: baixa o asset para **`cacheDir/updates/update.apk`** (via
+  `<arquivo>.part` + rename), confere `size` e o `digest` sha256 do asset quando presente, e
+  dispara o instalador (`ACTION_VIEW` + FileProvider + `REQUEST_INSTALL_PACKAGES`,
+  `FLAG_GRANT_READ_URI_PERMISSION`). Com vários assets, escolhe o maior `.apk`.
 - Android não permite instalação silenciosa sem device owner/root: o usuário confirma na tela
   do instalador. O app pede "Instalar apps desconhecidos" no onboarding/ao atualizar.
 - Checagem automática 1x/dia (WorkManager) + botão "Buscar atualização" em Settings.
-- Assinatura: **a mesma chave em todos os releases** (senão o Android recusa o update).
+- Assinatura: **a mesma chave em todos os releases** (senão o Android recusa o update). A
+  `signingConfig` de release só existe quando `KEYSTORE_PATH` está no ambiente (CI/local); sem ela
+  o build gera APK não assinado.
+- **Minify desligado** nesta versão (`isMinifyEnabled = false`, `isShrinkResources = false`): não
+  há device para smoke-testar o APK com R8.
+
+## CI e release (GitHub Actions)
+
+- `.github/workflows/ci.yml` — push/PR em `main`: JDK 21 (temurin), `gradle/actions/setup-gradle`,
+  `sdkmanager` instala `platforms;android-37` + `build-tools;37.0.0` (o passo tolera layout
+  diferente do SDK e segue se o `sdkmanager` não existir), depois
+  `./gradlew :app:assembleDebug :app:testDebugUnitTest`. Em falha, sobe
+  `app/build/reports/tests/test` como artefato.
+- `.github/workflows/release.yml` — push de tag `v*` (e `workflow_dispatch` sobre tag):
+  decodifica `secrets.KEYSTORE_BASE64` para `$RUNNER_TEMP/release.jks`, deriva `VERSION` da tag e
+  `VCODE` por aritmética bash (`major*10000+minor*100+patch`, ignorando o sufixo), roda
+  `:app:assembleRelease` com as env `KEYSTORE_PATH`/`KEYSTORE_PASSWORD`/`KEY_ALIAS`/`KEY_PASSWORD`,
+  copia para `OneDriveSync-${VERSION}.apk`, verifica com `apksigner --print-certs` e publica via
+  `softprops/action-gh-release@v2` com `generate_release_notes` e
+  `prerelease: contains(ref_name, '-')`.
+- Secrets: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. O keystore nunca é
+  commitado (`.secrets/`, `*.jks`, `keystore.properties` no `.gitignore`).
+
+## Pareamento
+
+- A **raiz do drive** é pareável: o wizard começa em `/me/drive/root` com `id = null` e, ao
+  escolher a raiz, resolve o item id real (`GET /me/drive/root`) antes de gravar o par.
+- O par remoto pode ser qualquer pasta; o delta continua sendo o da raiz do drive, filtrado por
+  ancestral na reconstrução de `rel_path`.
+- O par local não pode ser a própria raiz do armazenamento (`localPath != storageRoot`).
 
 ## Convenções
 
@@ -214,3 +250,5 @@ Repo público: `github.com/andersonlucasg3/onedrive-sync-android`.
 - **F4** WorkManager + ForegroundService + Notifier + boot receiver.
 - **F5** UI completa (onboarding, pares, wizard, conflitos, exclusões, log, settings).
 - **F6** Build final, APK debug, README de instalação e app registration.
+- **F7** Assinatura de release, CI/release no GitHub Actions, versionamento por tag, README e
+  limpeza (PlaceholderScreen removido).

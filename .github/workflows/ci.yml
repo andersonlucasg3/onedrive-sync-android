@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build + testes JVM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: JDK 21 (temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # A imagem do runner normalmente para no platform 36; o app compila com 37.
+      - name: Android SDK
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK" ]; then
+            echo "ANDROID_SDK_ROOT/ANDROID_HOME não definidos; confiando no SDK da imagem"
+            exit 0
+          fi
+          SDKMANAGER=""
+          for candidate in \
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK/cmdline-tools/bin/sdkmanager" \
+            "$SDK/tools/bin/sdkmanager"; do
+            if [ -x "$candidate" ]; then SDKMANAGER="$candidate"; break; fi
+          done
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager || true)"
+          fi
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::warning::sdkmanager não encontrado em $SDK — seguindo com o SDK da imagem"
+            exit 0
+          fi
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-37" "build-tools;37.0.0"
+
+      - name: gradlew executável
+        run: chmod +x gradlew
+
+      - name: Build e testes JVM
+        run: ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Relatório de testes (falha)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: app/build/reports/tests/test
+          if-no-files-found: ignore
+          retention-days: 7

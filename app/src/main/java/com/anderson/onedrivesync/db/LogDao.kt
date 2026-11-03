@@ -37,6 +37,15 @@ object LogDao {
             }
         }
 
+    /** Deletes every row ("Limpar log" in the activity screen). */
+    fun clear(db: SQLiteDatabase) {
+        db.delete(TABLE, null, null)
+    }
+
+    /** Row count, for the diagnostics summary ("tamanho do log"). */
+    fun count(db: SQLiteDatabase): Int =
+        db.rawQuery("SELECT COUNT(*) FROM $TABLE", null).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
     /** Keeps the newest [keep] rows. */
     fun prune(db: SQLiteDatabase, keep: Int = 2000) {
         db.execSQL(

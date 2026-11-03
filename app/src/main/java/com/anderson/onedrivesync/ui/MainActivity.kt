@@ -1,64 +1,42 @@
 package com.anderson.onedrivesync.ui
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import com.anderson.onedrivesync.R
+import androidx.compose.runtime.mutableStateOf
+import com.anderson.onedrivesync.notify.Notifier
+import com.anderson.onedrivesync.ui.nav.AppNavHost
+import com.anderson.onedrivesync.ui.nav.initialDestination
 import com.anderson.onedrivesync.ui.theme.OneDriveSyncTheme
 
 class MainActivity : ComponentActivity() {
+
+    /** Last intent delivered by [onNewIntent]; navigation consumes it and clears the state. */
+    private val newIntent = mutableStateOf<Intent?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // A notification tap can ask for a specific screen, but only once the app is usable.
+        val startDestination = initialDestination(this, intent?.getStringExtra(Notifier.EXTRA_SCREEN))
         setContent {
+            // Reading snapshot state here is what makes onNewIntent recompose the nav host.
+            val screen = newIntent.value?.getStringExtra(Notifier.EXTRA_SCREEN)
             OneDriveSyncTheme {
-                HomeScreen()
+                AppNavHost(
+                    startDestination = startDestination,
+                    screenRequest = screen,
+                    onScreenRequestHandled = { newIntent.value = null },
+                )
             }
         }
     }
-}
 
-@Composable
-private fun HomeScreen() {
-    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = stringResource(R.string.app_title),
-                style = MaterialTheme.typography.headlineMedium,
-            )
-            Text(
-                text = stringResource(R.string.app_placeholder),
-                style = MaterialTheme.typography.bodyLarge,
-            )
-        }
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun HomeScreenPreview() {
-    OneDriveSyncTheme {
-        HomeScreen()
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        newIntent.value = intent
     }
 }

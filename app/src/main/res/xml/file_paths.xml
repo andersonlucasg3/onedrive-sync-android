@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Log exports shared through ACTION_SEND. -->
+    <cache-path name="logs" path="logs/" />
+    <!-- Downloaded update APKs handed to the system installer. -->
+    <cache-path name="updates" path="updates/" />
+</paths>
