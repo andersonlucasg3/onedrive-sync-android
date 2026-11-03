@@ -17,7 +17,7 @@ android {
         // Overridden by CI/Gradle properties: -PappVersionCode / -PappVersionName.
         // Convention: major*10000 + minor*100 + patch (1.0.0 -> 10000, 1.2.3 -> 10203).
         versionCode = (findProperty("appVersionCode") as String?)?.toInt() ?: 10000
-        versionName = (findProperty("appVersionName") as String?) ?: "1.0.0-beta.1"
+        versionName = (findProperty("appVersionName") as String?) ?: "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
