@@ -1,5 +1,7 @@
 package com.anderson.onedrivesync.auth
 
+import com.anderson.onedrivesync.core.DEFAULT_TENANT
+import com.anderson.onedrivesync.core.normalizeTenant
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -22,6 +24,7 @@ import okhttp3.Request
 
 class AuthManager(
     private val clientId: () -> String?,
+    private val tenant: () -> String = { DEFAULT_TENANT },
     private val tokens: TokenStorage,
     private val http: OkHttpClient = OkHttpClient(),
     private val authBase: String = DEFAULT_AUTH_BASE,
@@ -167,8 +170,14 @@ class AuthManager(
         return http.newCall(request).execute().use { it.code to it.body.string() }
     }
 
+    // The tenant is editable in Settings while the app runs, so it is resolved per request.
+    private val authority: HttpUrl
+        get() = baseUrl.newBuilder()
+            .addPathSegments("${normalizeTenant(tenant())}/oauth2/v2.0")
+            .build()
+
     private fun endpoint(path: String): HttpUrl =
-        baseUrl.newBuilder().addPathSegments("consumers/oauth2/v2.0/$path").build()
+        authority.newBuilder().addPathSegment(path).build()
 
     private fun fail(message: String): Result<Unit> {
         _state.value = AuthState.Error(message)

@@ -57,11 +57,12 @@ import com.anderson.onedrivesync.hyperos.HyperOsPermissions
 import com.anderson.onedrivesync.sync.SyncState
 import com.anderson.onedrivesync.ui.components.AuthSection
 import com.anderson.onedrivesync.ui.components.ChecklistItem
+import com.anderson.onedrivesync.ui.components.TenantField
 import com.anderson.onedrivesync.ui.util.relativeTime
 import com.anderson.onedrivesync.ui.vm.DiagnosticsUiState
 import com.anderson.onedrivesync.ui.vm.SettingsUiState
 import com.anderson.onedrivesync.ui.vm.SettingsViewModel
-import com.anderson.onedrivesync.ui.vm.UpdateUiState
+import com.anderson.onedrivesync.update.UpdateState
 
 private val SYNC_INTERVALS = listOf(15, 30, 60, 120, 360, 1440)
 
@@ -117,6 +118,7 @@ fun SettingsScreen(
         ) {
             SectionTitle(text = stringResource(R.string.settings_account_title))
             AuthSection()
+            TenantField(tenant = state.tenant, onSave = viewModel::setTenant)
 
             SectionTitle(text = stringResource(R.string.settings_sync_title))
             SyncCard(
@@ -344,7 +346,7 @@ private fun AboutCard(onOpenRepository: () -> Unit) {
 @Composable
 private fun UpdatesCard(
     currentVersion: String,
-    state: UpdateUiState,
+    state: UpdateState,
     onCheck: () -> Unit,
     onInstall: () -> Unit,
 ) {
@@ -358,14 +360,14 @@ private fun UpdatesCard(
                 style = MaterialTheme.typography.bodyMedium,
             )
             when (state) {
-                UpdateUiState.Idle -> CheckButton(onCheck)
-                UpdateUiState.Checking -> Text(
+                UpdateState.Idle -> CheckButton(onCheck)
+                UpdateState.Checking -> Text(
                     text = stringResource(R.string.settings_updates_checking),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                UpdateUiState.UpToDate -> {
+                UpdateState.UpToDate -> {
                     Text(
                         text = stringResource(R.string.settings_updates_up_to_date),
                         style = MaterialTheme.typography.bodySmall,
@@ -374,7 +376,7 @@ private fun UpdatesCard(
                     CheckButton(onCheck)
                 }
 
-                is UpdateUiState.Available -> {
+                is UpdateState.Available -> {
                     Text(
                         text = stringResource(R.string.settings_updates_available, state.info.versionName),
                         style = MaterialTheme.typography.titleSmall,
@@ -393,27 +395,36 @@ private fun UpdatesCard(
                     }
                 }
 
-                is UpdateUiState.Downloading -> {
+                is UpdateState.Downloading -> {
+                    val percent = state.percent.coerceIn(0, 100)
                     Text(
-                        text = stringResource(R.string.settings_updates_downloading, state.progress),
+                        text = if (state.percent >= 0) {
+                            stringResource(R.string.settings_updates_downloading, percent)
+                        } else {
+                            stringResource(R.string.settings_updates_downloading_start)
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     LinearProgressIndicator(
-                        progress = { state.progress / 100f },
+                        progress = { percent / 100f },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
 
-                UpdateUiState.Installing -> Text(
+                UpdateState.Installing -> Text(
                     text = stringResource(R.string.settings_updates_installing),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                is UpdateUiState.Error -> {
+                is UpdateState.Error -> {
                     Text(
-                        text = state.message,
+                        text = if (state.message.isBlank()) {
+                            stringResource(R.string.settings_updates_error)
+                        } else {
+                            state.message
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )

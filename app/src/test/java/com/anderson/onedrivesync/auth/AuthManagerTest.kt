@@ -112,8 +112,69 @@ class AuthManagerTest {
         assertEquals(AuthState.SignedOut, manager.state.value)
     }
 
-    private fun manager(store: TokenStorage): AuthManager = AuthManager(
+    @Test
+    fun `sign in uses the configured tenant for device code and token`() = runBlocking {
+        server.enqueue(json(200, DEVICE_CODE))
+        server.enqueue(json(200, ACCESS_TOKEN))
+
+        val manager = manager(FakeTokenStore(), tenant = "meu-tenant")
+        manager.delayFn = {}
+
+        assertTrue(manager.signIn().isSuccess)
+
+        assertEquals("/meu-tenant/oauth2/v2.0/devicecode", server.takeRequest().path)
+        assertEquals("/meu-tenant/oauth2/v2.0/token", server.takeRequest().path)
+    }
+
+    @Test
+    fun `blank tenant falls back to consumers`() = runBlocking {
+        server.enqueue(json(200, DEVICE_CODE))
+        server.enqueue(json(200, ACCESS_TOKEN))
+
+        val manager = manager(FakeTokenStore(), tenant = "   ")
+        manager.delayFn = {}
+
+        assertTrue(manager.signIn().isSuccess)
+
+        assertEquals("/consumers/oauth2/v2.0/devicecode", server.takeRequest().path)
+        assertEquals("/consumers/oauth2/v2.0/token", server.takeRequest().path)
+    }
+
+    @Test
+    fun `default tenant is consumers`() = runBlocking {
+        server.enqueue(json(200, DEVICE_CODE))
+        server.enqueue(json(200, ACCESS_TOKEN))
+
+        val manager = AuthManager(
+            clientId = { "client-1" },
+            tokens = FakeTokenStore(),
+            http = OkHttpClient(),
+            authBase = server.url("/").toString(),
+        )
+        manager.delayFn = {}
+
+        assertTrue(manager.signIn().isSuccess)
+
+        assertEquals("/consumers/oauth2/v2.0/devicecode", server.takeRequest().path)
+        assertEquals("/consumers/oauth2/v2.0/token", server.takeRequest().path)
+    }
+
+    @Test
+    fun `refresh uses the configured tenant`() = runBlocking {
+        server.enqueue(json(200, REFRESHED_TOKEN))
+        val store = FakeTokenStore(Tokens("stale", "refresh-1", 0L))
+        val manager = manager(store, tenant = "meu-tenant")
+
+        assertEquals("access-2", manager.accessToken())
+
+        val request = server.takeRequest()
+        assertEquals("/meu-tenant/oauth2/v2.0/token", request.path)
+        assertEquals("access-2", store.tokens?.accessToken)
+    }
+
+    private fun manager(store: TokenStorage, tenant: String = "consumers"): AuthManager = AuthManager(
         clientId = { "client-1" },
+        tenant = { tenant },
         tokens = store,
         http = OkHttpClient(),
         authBase = server.url("/").toString(),
@@ -125,5 +186,9 @@ class AuthManagerTest {
     private companion object {
         const val DEVICE_CODE =
             """{"device_code":"device-1","user_code":"ABCD-EFGH","verification_uri":"https://microsoft.com/devicelogin","expires_in":900,"interval":5,"message":"Use o código ABCD-EFGH"}"""
+        const val ACCESS_TOKEN =
+            """{"access_token":"access-1","refresh_token":"refresh-1","expires_in":3600}"""
+        const val REFRESHED_TOKEN =
+            """{"access_token":"access-2","refresh_token":"refresh-2","expires_in":3600}"""
     }
 }

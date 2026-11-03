@@ -1,7 +1,11 @@
 package com.anderson.onedrivesync.sync
 
+import com.anderson.onedrivesync.graph.DriveItem
+import com.anderson.onedrivesync.graph.FileFacet
+import com.anderson.onedrivesync.graph.FileHashes
 import com.anderson.onedrivesync.graph.GraphException
 import java.io.File
+import java.util.Base64
 
 /**
  * In-memory OneDrive for tests: a tree of nodes plus a change log.
@@ -42,6 +46,12 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
 
     /** Makes the next [deltaPage] fail with 410 Gone, as Graph does for an expired cursor. */
     var failNextDeltaWithGone = false
+
+    /**
+     * Emulates the Graph wire format: hashes leave the fake as base64 and come back through
+     * [remoteItemOf], exactly like `GraphRemoteApi` maps a real drive item.
+     */
+    var hashesAsBase64 = false
 
     private var failDownloadId: String? = null
     private var corruptDownloadId: String? = null
@@ -236,19 +246,34 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
         nodes.remove(remoteId)
     }
 
-    private fun Node.toRemoteItem(): RemoteItem = RemoteItem(
-        id = id,
-        name = name,
-        parentId = parentId,
-        isDir = isDir,
-        size = bytes.size.toLong(),
-        mtimeMs = mtimeMs,
-        quickXorHash = if (isDir) null else hashBytes(bytes),
-        deleted = false,
-    )
+    private fun Node.toRemoteItem(): RemoteItem {
+        val item = RemoteItem(
+            id = id,
+            name = name,
+            parentId = parentId,
+            isDir = isDir,
+            size = bytes.size.toLong(),
+            mtimeMs = mtimeMs,
+            quickXorHash = if (isDir) null else hashBytes(bytes),
+            deleted = false,
+        )
+        if (!hashesAsBase64 || item.quickXorHash == null) return item
+        val dto = DriveItem(
+            id = item.id,
+            file = FileFacet(hashes = FileHashes(quickXorHash = hexToBase64(item.quickXorHash))),
+        )
+        return item.copy(quickXorHash = remoteItemOf(dto).quickXorHash)
+    }
 
     companion object {
         const val ROOT = "root"
         private const val CURSOR_PREFIX = "c:"
     }
+}
+
+private fun hexToBase64(hex: String): String {
+    val bytes = ByteArray(hex.length / 2) { i ->
+        ((Character.digit(hex[i * 2], 16) shl 4) or Character.digit(hex[i * 2 + 1], 16)).toByte()
+    }
+    return Base64.getEncoder().encodeToString(bytes)
 }

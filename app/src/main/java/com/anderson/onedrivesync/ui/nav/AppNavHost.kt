@@ -18,7 +18,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -36,6 +39,7 @@ import com.anderson.onedrivesync.App
 import com.anderson.onedrivesync.R
 import com.anderson.onedrivesync.notify.Notifier
 import com.anderson.onedrivesync.sync.SyncState
+import com.anderson.onedrivesync.ui.components.UpdateDialog
 import com.anderson.onedrivesync.ui.screens.ConflictsScreen
 import com.anderson.onedrivesync.ui.screens.LogScreen
 import com.anderson.onedrivesync.ui.screens.OnboardingScreen
@@ -47,6 +51,7 @@ import com.anderson.onedrivesync.ui.screens.WizardScreen
 import com.anderson.onedrivesync.ui.vm.ShellViewModel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 private data class BottomItem(
     val route: String,
@@ -83,6 +88,11 @@ fun AppNavHost(
     val currentRoute = backStackEntry?.destination?.route
     val showBottomBar = currentRoute != null && currentRoute in Routes.bottomBarRoutes
 
+    // One dialog over the whole shell: the app is single-activity, so this covers every screen.
+    val updateManager = (context.applicationContext as App).container.updateManager
+    val updateState by updateManager.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+
     // A sync can queue conflicts/deletions behind the shell's back; refresh the badge when it ends.
     // The mapped flow only emits on idle transitions, so running progress does not recompose the
     // shell for every file.
@@ -107,85 +117,93 @@ fun AppNavHost(
         onScreenRequestHandled()
     }
 
-    Scaffold(
-        bottomBar = {
-            if (showBottomBar) {
-                NavigationBar {
-                    BOTTOM_ITEMS.forEach { item ->
-                        NavigationBarItem(
-                            selected = backStackEntry?.destination?.hierarchy?.any { destination ->
-                                destination.route == item.route ||
-                                    (item.route == Routes.PENDING && destination.route == Routes.CONFLICTS)
-                            } == true,
-                            onClick = { navController.navigateToTab(item.route) },
-                            icon = {
-                                val badgeCount = if (item.route == Routes.PENDING) pendingTotal else 0
-                                if (badgeCount > 0) {
-                                    BadgedBox(badge = { Badge { Text(badgeCount.toString()) } }) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            bottomBar = {
+                if (showBottomBar) {
+                    NavigationBar {
+                        BOTTOM_ITEMS.forEach { item ->
+                            NavigationBarItem(
+                                selected = backStackEntry?.destination?.hierarchy?.any { destination ->
+                                    destination.route == item.route ||
+                                        (item.route == Routes.PENDING && destination.route == Routes.CONFLICTS)
+                                } == true,
+                                onClick = { navController.navigateToTab(item.route) },
+                                icon = {
+                                    val badgeCount = if (item.route == Routes.PENDING) pendingTotal else 0
+                                    if (badgeCount > 0) {
+                                        BadgedBox(badge = { Badge { Text(badgeCount.toString()) } }) {
+                                            Icon(imageVector = item.icon, contentDescription = null)
+                                        }
+                                    } else {
                                         Icon(imageVector = item.icon, contentDescription = null)
                                     }
-                                } else {
-                                    Icon(imageVector = item.icon, contentDescription = null)
-                                }
-                            },
-                            label = { Text(stringResource(item.label)) },
-                        )
+                                },
+                                label = { Text(stringResource(item.label)) },
+                            )
+                        }
                     }
                 }
-            }
-        },
-    ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = startDestination,
-            modifier = Modifier.padding(innerPadding),
-        ) {
-            composable(Routes.ONBOARDING) {
-                OnboardingScreen(
-                    onContinue = {
-                        navController.navigate(Routes.PAIRS) {
-                            popUpTo(Routes.ONBOARDING) { inclusive = true }
-                            launchSingleTop = true
-                        }
-                    },
-                )
-            }
-            composable(Routes.PAIRS) {
-                PairsScreen(
-                    onNewPair = { navController.navigate(Routes.WIZARD) },
-                    onOpenOnboarding = { navController.navigate(Routes.ONBOARDING) },
-                )
-            }
-            // The notification route only preselects the conflicts tab; the bar keeps one item.
-            composable(Routes.CONFLICTS) {
-                ConflictsScreen(onCountsChanged = { shellViewModel.refresh() })
-            }
-            composable(Routes.PENDING) {
-                PendingScreen(
-                    initialTab = PENDING_TAB_CONFLICTS,
-                    onCountsChanged = { shellViewModel.refresh() },
-                )
-            }
-            composable(Routes.LOG) { LogScreen() }
-            composable(Routes.SETTINGS) { SettingsScreen() }
-            composable(Routes.WIZARD) {
-                WizardScreen(
-                    onClose = { navController.popBackStack() },
-                    onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                )
+            },
+        ) { innerPadding ->
+            NavHost(
+                navController = navController,
+                startDestination = startDestination,
+                modifier = Modifier.padding(innerPadding),
+            ) {
+                composable(Routes.ONBOARDING) {
+                    OnboardingScreen(
+                        onContinue = {
+                            navController.navigate(Routes.PAIRS) {
+                                popUpTo(Routes.ONBOARDING) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        },
+                    )
+                }
+                composable(Routes.PAIRS) {
+                    PairsScreen(
+                        onNewPair = { navController.navigate(Routes.WIZARD) },
+                        onOpenOnboarding = { navController.navigate(Routes.ONBOARDING) },
+                    )
+                }
+                // The notification route only preselects the conflicts tab; the bar keeps one item.
+                composable(Routes.CONFLICTS) {
+                    ConflictsScreen(onCountsChanged = { shellViewModel.refresh() })
+                }
+                composable(Routes.PENDING) {
+                    PendingScreen(
+                        initialTab = PENDING_TAB_CONFLICTS,
+                        onCountsChanged = { shellViewModel.refresh() },
+                    )
+                }
+                composable(Routes.LOG) { LogScreen() }
+                composable(Routes.SETTINGS) { SettingsScreen() }
+                composable(Routes.WIZARD) {
+                    WizardScreen(
+                        onClose = { navController.popBackStack() },
+                        onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                    )
+                }
             }
         }
+
+        UpdateDialog(
+            state = updateState,
+            onDownload = { scope.launch { updateManager.downloadAndInstall(context) } },
+            onDismiss = updateManager::dismiss,
+            onSkip = updateManager::skipCurrentVersion,
+        )
     }
 }
 
 /**
- * The app is only usable with a Client ID, all-files access and a stored token. A notification
- * screen only wins when those hold, otherwise the user would land on a screen that cannot work.
+ * The app is only usable with all-files access and a stored token. A notification screen only wins
+ * when those hold, otherwise the user would land on a screen that cannot work.
  */
 fun initialDestination(context: Context, screen: String?): String {
     val container = (context.applicationContext as? App)?.container ?: return Routes.ONBOARDING
-    val needsOnboarding = container.prefs.clientId.isNullOrBlank() ||
-        !Environment.isExternalStorageManager() ||
+    val needsOnboarding = !Environment.isExternalStorageManager() ||
         !container.authManager.isSignedIn()
     if (needsOnboarding) return Routes.ONBOARDING
     return when (screen) {

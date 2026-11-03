@@ -61,14 +61,15 @@
     <string name="perm_autostart_desc">Depois de reiniciar o celular, o HyperOS bloqueia a inicialização do app. Liberar aqui mantém o sync agendado.</string>
 
     <!-- Conta Microsoft -->
-    <string name="auth_client_id_label">Client ID (Azure)</string>
-    <string name="auth_client_id_hint">Cole o Application (client) ID do app registrado no Azure.</string>
+    <string name="auth_tenant_label">Diretório (tenant)</string>
+    <string name="auth_tenant_hint">consumers para app de contas pessoais, common para app multi-tenant, ou o ID/domínio do diretório. Salvo ao sair do campo.</string>
+    <string name="auth_tenant_save">Salvar diretório</string>
     <string name="auth_sign_in">Entrar com Microsoft</string>
     <string name="auth_sign_out">Sair</string>
     <string name="auth_connected">Conectado</string>
     <string name="auth_connected_hint">Sua conta do OneDrive está autorizada.</string>
     <string name="auth_pending_title">Código do dispositivo</string>
-    <string name="auth_pending_instructions">Abra microsoft.com/devicelogin e informe este código para autorizar o app:</string>
+    <string name="auth_pending_instructions">Abra o link abaixo e informe este código para autorizar o app:</string>
     <string name="auth_copy_code">Copiar código</string>
     <string name="auth_copied">Código copiado.</string>
     <string name="auth_cancel">Cancelar</string>
@@ -200,7 +201,8 @@
     <string name="settings_diag_log">Log: %1$d linhas</string>
     <string name="settings_diag_test">Testar conexão</string>
     <string name="settings_diag_testing">Testando…</string>
-    <string name="settings_diag_connection_ok">Conectado como %1$s</string>
+    <string name="settings_diag_connection_ok">Conectado · %1$s</string>
+    <string name="settings_diag_connection_free">%1$s livres</string>
     <string name="settings_diag_share">Compartilhar logs</string>
     <string name="settings_diag_full_resync">Forçar sincronização completa</string>
     <string name="settings_diag_resync_title">Sincronizar tudo de novo?</string>
@@ -216,7 +218,16 @@
     <string name="settings_updates_available">Versão %1$s disponível</string>
     <string name="settings_updates_download">Baixar e instalar</string>
     <string name="settings_updates_downloading">Baixando… %1$d%%</string>
+    <string name="settings_updates_downloading_start">Iniciando o download…</string>
     <string name="settings_updates_installing">Abrindo o instalador…</string>
     <string name="settings_updates_error">Não foi possível verificar atualizações.</string>
     <string name="settings_error">Não foi possível concluir a ação.</string>
+
+    <!-- Diálogo de atualização -->
+    <string name="update_dialog_title">Atualização disponível</string>
+    <string name="update_dialog_version">Versão %1$s</string>
+    <string name="update_dialog_later">Depois</string>
+    <string name="update_dialog_skip">Ignorar esta versão</string>
+    <string name="update_dialog_hide">Ocultar</string>
+    <string name="update_dialog_close">Fechar</string>
 </resources>

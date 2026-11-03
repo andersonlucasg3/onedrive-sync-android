@@ -171,6 +171,38 @@ class SyncEngineTest {
     }
 
     @Test
+    fun `a remote hash in base64 still downloads and the next cycle transfers nothing`() {
+        remote.hashesAsBase64 = true
+        remote.addFile("a.txt", "{}\n", mtimeMs = 1_600_000_000_000)
+
+        runSync()
+
+        assertEquals("{}\n", File(root, "a.txt").readText())
+        val entry = store.entriesOf(PAIR).single()
+        assertEquals("a.txt", entry.relPath)
+        assertEquals("7be8830200000000000000000300000000000000", entry.remoteHash)
+        assertEquals(hashBytes("{}\n".toByteArray()), entry.localHash)
+        assertTrue(store.conflictRows.isEmpty())
+        assertNotNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        remote.clearCalls()
+
+        runSync()
+
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Download })
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Upload })
+
+        // Force a full enumeration so the second pass really compares the stored hash with the remote one.
+        store.setState(SyncEngine.KEY_DELTA_LINK, null)
+        remote.clearCalls()
+        runSync()
+
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Download })
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Upload })
+        assertTrue(store.conflictRows.isEmpty())
+        assertTrue(store.pendingOps.isEmpty())
+    }
+
+    @Test
     fun `expired delta reenumerates and creates no deletion pending`() {
         remote.addFile("a.txt", "x")
         runSync()

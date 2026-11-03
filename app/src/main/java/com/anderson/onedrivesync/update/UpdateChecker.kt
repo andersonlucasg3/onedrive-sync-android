@@ -23,6 +23,12 @@ data class ReleaseInfo(
     val publishedAt: String,
 )
 
+/** What the update flow needs from the release endpoint; faked in the JVM tests. */
+interface ReleaseSource {
+    val currentVersion: String
+    suspend fun latest(): ReleaseInfo?
+}
+
 /**
  * Reads the latest release from the public repository (no token, 60 requests/hour per IP).
  *
@@ -33,10 +39,10 @@ class UpdateChecker(
     private val http: OkHttpClient,
     private val repo: String = DEFAULT_REPO,
     private val apiBase: String = DEFAULT_API_BASE,
-) {
-    val currentVersion: String = BuildConfig.VERSION_NAME
+) : ReleaseSource {
+    override val currentVersion: String = BuildConfig.VERSION_NAME
 
-    suspend fun latest(): ReleaseInfo? = withContext(Dispatchers.IO) {
+    override suspend fun latest(): ReleaseInfo? = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url("${apiBase.trimEnd('/')}/repos/$repo/releases/latest")
             .header("Accept", "application/vnd.github+json")

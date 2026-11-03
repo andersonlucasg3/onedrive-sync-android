@@ -1,6 +1,7 @@
 package com.anderson.onedrivesync.core
 
 import android.content.Context
+import com.anderson.onedrivesync.BuildConfig
 import com.anderson.onedrivesync.auth.AuthManager
 import com.anderson.onedrivesync.auth.TokenStore
 import com.anderson.onedrivesync.db.Db
@@ -15,8 +16,12 @@ import com.anderson.onedrivesync.sync.RemoteApi
 import com.anderson.onedrivesync.sync.SyncEngine
 import com.anderson.onedrivesync.update.UpdateApplier
 import com.anderson.onedrivesync.update.UpdateChecker
+import com.anderson.onedrivesync.update.UpdateManager
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 
 class AppContainer(context: Context) {
@@ -38,7 +43,12 @@ class AppContainer(context: Context) {
     }
 
     val authManager: AuthManager by lazy {
-        AuthManager(clientId = { prefs.clientId }, tokens = tokenStore, http = okHttpClient)
+        AuthManager(
+            clientId = { BuildConfig.DEFAULT_CLIENT_ID },
+            tenant = { prefs.tenant },
+            tokens = tokenStore,
+            http = okHttpClient,
+        )
     }
 
     val graphClient: GraphClient by lazy {
@@ -67,4 +77,14 @@ class AppContainer(context: Context) {
     val updateChecker: UpdateChecker by lazy { UpdateChecker(okHttpClient) }
 
     val updateApplier: UpdateApplier by lazy { UpdateApplier(okHttpClient) }
+
+    /** One state machine for the launch check, the Settings card and the dialog over the app. */
+    val updateManager: UpdateManager by lazy {
+        UpdateManager(
+            checker = updateChecker,
+            applier = updateApplier,
+            prefs = prefs,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        )
+    }
 }

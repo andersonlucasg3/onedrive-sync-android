@@ -18,6 +18,9 @@ android {
         // Convention: major*10000 + minor*100 + patch (1.0.0 -> 10000, 1.2.3 -> 10203).
         versionCode = (findProperty("appVersionCode") as String?)?.toInt() ?: 10000
         versionName = (findProperty("appVersionName") as String?) ?: "1.0.0"
+        // Baked-in public client id; -PappClientId overrides it for a build with another registration.
+        val appClientId = (findProperty("appClientId") as String?) ?: "b556261b-31a9-49a9-aa9b-2a4a611291ff"
+        buildConfigField("String", "DEFAULT_CLIENT_ID", "\"$appClientId\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

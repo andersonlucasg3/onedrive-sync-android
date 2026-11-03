@@ -34,6 +34,7 @@ import com.anderson.onedrivesync.R
 import com.anderson.onedrivesync.hyperos.HyperOsPermissions
 import com.anderson.onedrivesync.ui.components.AuthSection
 import com.anderson.onedrivesync.ui.components.ChecklistItem
+import com.anderson.onedrivesync.ui.components.TenantField
 import com.anderson.onedrivesync.ui.vm.OnboardingViewModel
 
 /**
@@ -135,6 +136,7 @@ fun OnboardingScreen(
 
             SectionTitle(text = stringResource(R.string.onboarding_section_account))
             AuthSection()
+            TenantField(tenant = state.tenant, onSave = viewModel::setTenant)
 
             Button(
                 onClick = onContinue,

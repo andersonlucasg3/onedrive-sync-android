@@ -1,9 +1,16 @@
 # Registro do app no Entra ID (Client ID)
 
-O app usa **OAuth2 device code flow** contra o tenant `consumers` (OneDrive pessoal).
+O APK distribuído **já vem com um Client ID embutido** (registro de propriedade do autor do
+projeto): para usar o app basta conectar a conta. Registrar um app próprio é **opcional e
+avançado** — útil para não depender do registro do autor ou para usar uma conta de outro diretório.
+
+O app usa **OAuth2 device code flow** contra o tenant configurado em Ajustes → Conta → **Diretório
+(tenant)**, com `consumers` como padrão (OneDrive pessoal).
 Não existe redirect URI, não existe PKCE manual, não precisa de admin consent.
 
 ## Passo a passo
+
+Só é necessário para quem for usar um registro próprio (opcional):
 
 1. Abra https://entra.microsoft.com (ou `portal.azure.com` → Microsoft Entra ID → App registrations;
    é o mesmo backend, útil se um dos portais estiver instável).
@@ -23,13 +30,33 @@ Não existe redirect URI, não existe PKCE manual, não precisa de admin consent
    Não precisa de "Grant admin consent" (conta pessoal não tem admin).
 7. Aba **Token configuration**: nada a fazer.
 
-## Onde colar no app
+## Onde fica o Client ID
 
-Settings → **Client ID do Azure** → colar → Salvar → **Entrar com Microsoft**.
-O código abre https://microsoft.com/devicelogin, mostra um código de 8 caracteres; você digita no
-navegador do celular (ou de outro dispositivo) e autoriza.
+O Client ID é embutido no APK (`BuildConfig.DEFAULT_CLIENT_ID`); o app não tem mais campo para
+digitá-lo. Para gerar um APK com outro registro, passe a propriedade Gradle
+`-PappClientId=<id>` (o `scripts/build.ps1` não repassa propriedades extras, então use
+`gradlew.bat :app:assembleDebug -PappClientId=<id>`).
 
-O Client ID fica em `SharedPreferences` (não no APK), então **trocar de registro não exige rebuild**.
+O único ajuste de login no app é o **Diretório (tenant)**, em Ajustes → Conta.
+
+## Qual tenant usar
+
+O campo **Diretório (tenant)** define o segmento da autoridade
+(`https://login.microsoftonline.com/<tenant>/oauth2/v2.0`) e precisa combinar com o
+*Supported account types* do registro:
+
+| Registro do app | Valor do campo |
+| --- | --- |
+| *Personal Microsoft accounts only* | `consumers` (padrão) |
+| *Accounts in any organizational directory and personal Microsoft accounts* | `common` |
+| *Accounts in this organizational directory only* (single-tenant) | ID do diretório (GUID) ou domínio, ex. `contoso.onmicrosoft.com` |
+| App multi-tenant usado só com um diretório | GUID ou domínio desse diretório |
+
+Quando o tenant não combina com o registro, o login falha no `devicecode`/`token` com
+`AADSTS700016` ("not a valid application identifier") ou `unauthorized_client`. Corrija o campo em
+Ajustes → Conta e entre de novo; não é preciso reinstalar nem recompilar. O valor fica em
+`SharedPreferences` e o padrão é `consumers`. O campo nunca fica vazio: valor em branco volta para
+`consumers`.
 
 ## Escopos usados
 

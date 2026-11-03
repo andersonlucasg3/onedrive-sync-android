@@ -28,8 +28,8 @@ segundo plano.
 - Conta **OneDrive pessoal** (Microsoft account). Contas corporativas não são o alvo.
 - Permissão **"acesso a todos os arquivos"** (`MANAGE_EXTERNAL_STORAGE`), necessária para ler e
   escrever em pastas arbitrárias como `DCIM` ou `Pictures/AlbumX`.
-- Um registro de app próprio no Entra ID (veja abaixo) — o Client ID é colado no app, não vem
-  embutido no APK.
+- Um registro de app próprio no Entra ID é **opcional** (veja abaixo) — o APK já vem com um Client
+  ID embutido, de propriedade do autor do projeto.
 
 ## Instalação
 
@@ -46,9 +46,10 @@ O app também checa atualizações sozinho (1x/dia) e no botão "Buscar atualiza
 
 ## Configuração
 
-1. Registre um app no Entra ID seguindo [`docs/APP-REGISTRATION.md`](docs/APP-REGISTRATION.md)
+1. (Opcional) Registre um app próprio no Entra ID seguindo [`docs/APP-REGISTRATION.md`](docs/APP-REGISTRATION.md)
    (device code flow, sem redirect URI; permissão delegada `Files.ReadWrite.All`).
-2. Abra **Configurações → Client ID do Azure**, cole o *Application (client) ID* e salve.
+2. Em **Configurações → Conta**, ajuste o **Diretório (tenant)** se o seu registro não for
+   `consumers` (o padrão). O Client ID já vem embutido no APK.
 3. Toque em **Entrar com Microsoft**: o app mostra um código de 8 caracteres; digite-o em
    <https://microsoft.com/devicelogin> e autorize.
 4. Crie um par em **Pares → Novo par**: escolha a pasta remota (navegando pelo OneDrive) e a pasta

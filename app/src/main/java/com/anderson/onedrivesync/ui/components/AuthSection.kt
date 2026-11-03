@@ -20,7 +20,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,11 +28,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -52,16 +51,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Microsoft account block: Client ID input, device-code sign-in (the code, the link and a copy
- * button) and the signed-in state. Self-contained so onboarding, settings and the wizard share it.
+ * Microsoft account block: device-code sign-in (the code, the link and a copy button) and the
+ * signed-in state. Self-contained so onboarding, settings and the wizard share it.
  */
 @Composable
 fun AuthSection(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val app = context.applicationContext as App
     val auth = app.container.authManager
-    val prefs = app.container.prefs
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
 
     val authState by auth.state.collectAsStateWithLifecycle()
     // Tokens survive process death, so "signed in" also comes from the token store, not only from
@@ -70,7 +69,6 @@ fun AuthSection(modifier: Modifier = Modifier) {
         value = authState is AuthState.SignedIn || withContext(Dispatchers.IO) { auth.isSignedIn() }
     }
 
-    var clientId by rememberSaveable { mutableStateOf(prefs.clientId.orEmpty()) }
     var busy by remember { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
 
@@ -107,18 +105,6 @@ fun AuthSection(modifier: Modifier = Modifier) {
                 }
             }
         } else {
-            OutlinedTextField(
-                value = clientId,
-                onValueChange = { text ->
-                    clientId = text
-                    prefs.clientId = text
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.auth_client_id_label)) },
-                supportingText = { Text(stringResource(R.string.auth_client_id_hint)) },
-                singleLine = true,
-            )
-
             val pending = authState as? AuthState.Pending
             val error = authState as? AuthState.Error
             if (pending != null) {
@@ -132,6 +118,8 @@ fun AuthSection(modifier: Modifier = Modifier) {
             } else {
                 Button(
                     onClick = {
+                        // Ends editing first, so a pending tenant edit is saved on focus loss.
+                        focusManager.clearFocus()
                         busy = true
                         localError = null
                         scope.launch {
@@ -150,7 +138,7 @@ fun AuthSection(modifier: Modifier = Modifier) {
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = clientId.isNotBlank() && !busy,
+                    enabled = !busy,
                 ) {
                     Text(stringResource(R.string.auth_sign_in))
                 }

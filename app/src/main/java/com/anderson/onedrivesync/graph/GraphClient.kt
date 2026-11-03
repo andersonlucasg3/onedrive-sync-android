@@ -39,6 +39,14 @@ class GraphClient(
         send { token -> authorized(url("me"), token).get().build() }.use { it.decode() }
     }
 
+    /** Drive metadata readable with `Files.ReadWrite.All` alone: the diagnostics call. */
+    suspend fun drive(): DriveInfo = withContext(Dispatchers.IO) {
+        val target = url("me", "drive").newBuilder()
+            .addQueryParameter("\$select", "id,driveType,quota")
+            .build()
+        send { token -> authorized(target, token).get().build() }.use { it.decode() }
+    }
+
     /** Drive root item, so the wizard can pair the whole drive with its real id. */
     suspend fun rootItem(): DriveItem = withContext(Dispatchers.IO) {
         send { token -> authorized(url("me", "drive", "root"), token).get().build() }.use { it.decode() }

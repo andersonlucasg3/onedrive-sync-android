@@ -38,6 +38,29 @@ class GraphClientTest {
     }
 
     @Test
+    fun `drive requests selected fields and parses quota`() = runBlocking {
+        server.enqueue(
+            json(
+                """
+                {"id":"drive-1","driveType":"personal",
+                 "quota":{"total":1000000000000,"used":250000000000,"remaining":750000000000}}
+                """,
+            ),
+        )
+
+        val drive = client.drive()
+
+        assertEquals("drive-1", drive.id)
+        assertEquals("personal", drive.driveType)
+        assertEquals(750000000000L, drive.quota?.remaining)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/v1.0/me/drive", request.requestUrl?.encodedPath)
+        assertEquals("id,driveType,quota", request.requestUrl?.queryParameter("\$select"))
+        assertEquals("Bearer token-1", request.headers["Authorization"])
+    }
+
+    @Test
     fun `root item requests drive root and parses the dto`() = runBlocking {
         server.enqueue(
             json(

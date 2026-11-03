@@ -66,6 +66,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // After the first frame: the manager checks in its own scope and reports through the
+        // dialog in AppNavHost, so a slow network never delays the UI.
+        (application as? App)?.container?.updateManager?.checkOnLaunch()
     }
 
     override fun onNewIntent(intent: Intent) {

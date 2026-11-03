@@ -74,6 +74,21 @@ data class DriveUser(
     val userPrincipalName: String? = null,
 )
 
+/** Drive metadata for diagnostics: readable with `Files.ReadWrite.All` alone, unlike `/me`. */
+@Serializable
+data class DriveInfo(
+    val id: String? = null,
+    val driveType: String? = null,
+    val quota: QuotaFacet? = null,
+)
+
+@Serializable
+data class QuotaFacet(
+    val total: Long? = null,
+    val used: Long? = null,
+    val remaining: Long? = null,
+)
+
 @Serializable
 internal data class UploadSession(
     @SerialName("uploadUrl") val uploadUrl: String,

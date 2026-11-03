@@ -22,7 +22,8 @@ fun remoteItemOf(dto: DriveItem): RemoteItem = RemoteItem(
     isDir = dto.folder != null,
     size = dto.size ?: 0L,
     mtimeMs = dto.fileSystemInfo?.lastModifiedEpochMs ?: 0L,
-    quickXorHash = dto.file?.hashes?.quickXorHash,
+    // Graph sends quickXorHash as base64; the index and QuickXorHash use lowercase hex.
+    quickXorHash = dto.file?.hashes?.quickXorHash?.let(::quickXorToHex),
     deleted = dto.deleted != null || dto.removed != null,
 )
 

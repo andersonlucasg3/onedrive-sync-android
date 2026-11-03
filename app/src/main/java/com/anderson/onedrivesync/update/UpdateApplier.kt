@@ -18,19 +18,25 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
+/** What the update flow needs from the APK layer; faked in the JVM tests. */
+interface ApkInstaller {
+    suspend fun download(info: ReleaseInfo, dest: File, onProgress: (Long, Long) -> Unit)
+    fun install(context: Context, apk: File)
+}
+
 /**
  * Downloads a release APK into the cache and hands it to the system installer.
  *
  * Android never installs silently for a sideloaded app: the user confirms in the installer, and
  * when "install unknown apps" is still off the app opens the per-app setting instead.
  */
-class UpdateApplier(private val http: OkHttpClient) {
+class UpdateApplier(private val http: OkHttpClient) : ApkInstaller {
 
     /**
      * Streams [info] into `<dest>.part`, validates size and, when the release carries a digest,
      * SHA-256, then renames it to [dest]. A mismatch deletes the partial file and throws.
      */
-    suspend fun download(info: ReleaseInfo, dest: File, onProgress: (Long, Long) -> Unit): Unit =
+    override suspend fun download(info: ReleaseInfo, dest: File, onProgress: (Long, Long) -> Unit): Unit =
         withContext(Dispatchers.IO) {
             val partial = File(dest.parentFile ?: dest, dest.name + ".part")
             partial.parentFile?.mkdirs()
@@ -83,7 +89,7 @@ class UpdateApplier(private val http: OkHttpClient) {
      * `ACTION_VIEW` of the APK through [FileProvider]; without "install unknown apps" the user is
      * sent to that setting first and has to tap install again.
      */
-    fun install(context: Context, apk: File) {
+    override fun install(context: Context, apk: File) {
         if (!context.packageManager.canRequestPackageInstalls()) {
             openUnknownSourcesSettings(context)
             return

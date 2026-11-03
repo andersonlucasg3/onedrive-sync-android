@@ -9,7 +9,9 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.anderson.onedrivesync.App
 import com.anderson.onedrivesync.R
 import com.anderson.onedrivesync.auth.AuthManager
+import com.anderson.onedrivesync.core.DEFAULT_TENANT
 import com.anderson.onedrivesync.core.Prefs
+import com.anderson.onedrivesync.core.normalizeTenant
 import com.anderson.onedrivesync.db.ConflictsDao
 import com.anderson.onedrivesync.db.Db
 import com.anderson.onedrivesync.db.LogDao
@@ -23,13 +25,11 @@ import com.anderson.onedrivesync.log.shareLog
 import com.anderson.onedrivesync.log.writeLogFile
 import com.anderson.onedrivesync.sync.SyncEngine
 import com.anderson.onedrivesync.sync.SyncState
-import com.anderson.onedrivesync.update.ReleaseInfo
-import com.anderson.onedrivesync.update.UpdateApplier
-import com.anderson.onedrivesync.update.UpdateChecker
-import com.anderson.onedrivesync.update.isNewerVersion
+import com.anderson.onedrivesync.ui.util.formatBytes
+import com.anderson.onedrivesync.update.UpdateManager
+import com.anderson.onedrivesync.update.UpdateState
 import com.anderson.onedrivesync.work.Scheduler
 import com.anderson.onedrivesync.work.SyncService
-import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,6 +57,7 @@ data class DiagnosticsUiState(
 data class SettingsUiState(
     val syncIntervalMinutes: Int = 30,
     val wifiOnly: Boolean = false,
+    val tenant: String = DEFAULT_TENANT,
     val checklist: HyperOsPermissions.Checklist = HyperOsPermissions.Checklist(
         allFiles = false,
         notifications = false,
@@ -66,17 +67,6 @@ data class SettingsUiState(
     val diagnostics: DiagnosticsUiState = DiagnosticsUiState(),
     val errorMessage: String? = null,
 )
-
-/** State of the "Atualizações" card. */
-sealed interface UpdateUiState {
-    data object Idle : UpdateUiState
-    data object Checking : UpdateUiState
-    data object UpToDate : UpdateUiState
-    data class Available(val info: ReleaseInfo) : UpdateUiState
-    data class Downloading(val progress: Int) : UpdateUiState
-    data object Installing : UpdateUiState
-    data class Error(val message: String) : UpdateUiState
-}
 
 /**
  * Settings values live in [Prefs] (the worker reads them directly); the checklist and the
@@ -90,13 +80,13 @@ class SettingsViewModel(
     private val db: Db,
     private val graphClient: GraphClient,
     private val authManager: AuthManager,
-    private val updateChecker: UpdateChecker,
-    private val updateApplier: UpdateApplier,
+    private val updateManager: UpdateManager,
 ) : ViewModel() {
     private val _state = MutableStateFlow(
         SettingsUiState(
             syncIntervalMinutes = prefs.syncIntervalMinutes,
             wifiOnly = prefs.wifionly,
+            tenant = prefs.tenant,
         ),
     )
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
@@ -104,11 +94,8 @@ class SettingsViewModel(
     /** Drives the "Cancelar sincronização" button: it only exists while the engine is busy. */
     val syncState: StateFlow<SyncState> = engine.state
 
-    private val _updateState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
-    val updateState: StateFlow<UpdateUiState> = _updateState.asStateFlow()
-
-    /** Release already on disk: re-opening the installer must not download the APK again. */
-    private var downloadedFor: String? = null
+    /** Same state machine as the dialog over the app: no second copy of the update state. */
+    val updateState: StateFlow<UpdateState> = updateManager.state
 
     init {
         refreshChecklist()
@@ -124,6 +111,13 @@ class SettingsViewModel(
     fun setWifiOnly(enabled: Boolean) {
         prefs.wifionly = enabled
         _state.update { it.copy(wifiOnly = enabled) }
+    }
+
+    /** Also normalizes, so the stored value and the field never stay blank. */
+    fun setTenant(value: String) {
+        val normalized = normalizeTenant(value)
+        prefs.tenant = normalized
+        _state.update { it.copy(tenant = normalized) }
     }
 
     fun refreshChecklist() {
@@ -201,7 +195,10 @@ class SettingsViewModel(
         }
     }
 
-    /** Real Graph call: shows the account behind the token or the actual failure message. */
+    /**
+     * Real Graph call: shows the drive behind the token or the actual failure message. Uses
+     * `/me/drive`, which `Files.ReadWrite.All` covers, instead of `/me`, which needs `User.Read`.
+     */
     fun testConnection() {
         if (_state.value.diagnostics.checking) return
         _state.update {
@@ -209,11 +206,14 @@ class SettingsViewModel(
         }
         viewModelScope.launch {
             try {
-                val user = graphClient.me()
+                val drive = graphClient.drive()
+                val freeSpace = drive.quota?.remaining?.takeIf { it > 0 }?.let {
+                    context.getString(R.string.settings_diag_connection_free, formatBytes(it))
+                }
                 val label = listOfNotNull(
-                    user.displayName?.takeIf { it.isNotBlank() },
-                    user.userPrincipalName?.takeIf { it.isNotBlank() },
-                ).distinct().joinToString(" · ")
+                    drive.driveType?.takeIf { it.isNotBlank() },
+                    freeSpace,
+                ).joinToString(" · ")
                     .ifEmpty { context.getString(R.string.settings_diag_signed_in) }
                 _state.update {
                     it.copy(
@@ -290,52 +290,16 @@ class SettingsViewModel(
     }
 
     fun checkUpdates() {
-        if (_updateState.value is UpdateUiState.Checking) return
-        _updateState.value = UpdateUiState.Checking
-        viewModelScope.launch {
-            val release = updateChecker.latest()
-            _updateState.value = when {
-                release == null -> UpdateUiState.Error(context.getString(R.string.settings_updates_error))
-                !isNewerVersion(updateChecker.currentVersion, release.versionName) -> UpdateUiState.UpToDate
-                else -> UpdateUiState.Available(release)
-            }
-        }
+        updateManager.checkNow()
     }
 
-    /** Downloads the release APK into cacheDir/updates and opens the system installer. */
+    /** Downloads into cacheDir/updates and opens the system installer through the manager. */
     fun downloadAndInstall() {
-        val info = (_updateState.value as? UpdateUiState.Available)?.info ?: return
-        viewModelScope.launch {
-            val apk = File(File(context.cacheDir, UPDATE_DIR), UPDATE_APK)
-            val cached = downloadedFor == info.apkUrl && apk.isFile && apk.length() == info.apkSize
-            val error = if (cached) {
-                null
-            } else {
-                _updateState.value = UpdateUiState.Downloading(0)
-                withContext(Dispatchers.IO) {
-                    try {
-                        updateApplier.download(info, apk) { done, total ->
-                            val percent = if (total > 0) ((done * 100) / total).toInt().coerceIn(0, 100) else 0
-                            _updateState.value = UpdateUiState.Downloading(percent)
-                        }
-                        null
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        e.message ?: context.getString(R.string.settings_updates_error)
-                    }
-                }
-            }
-            if (error != null) {
-                _updateState.value = UpdateUiState.Error(error)
-                return@launch
-            }
-            downloadedFor = info.apkUrl
-            _updateState.value = UpdateUiState.Installing
-            updateApplier.install(context, apk)
-            // The installer (or the unknown-sources screen) took over; allow trying again.
-            _updateState.value = UpdateUiState.Available(info)
-        }
+        viewModelScope.launch { updateManager.downloadAndInstall(context) }
+    }
+
+    fun dismissUpdate() {
+        updateManager.dismiss()
     }
 
     private fun loadDiagnostics(): DiagnosticsSnapshot {
@@ -358,9 +322,6 @@ class SettingsViewModel(
     )
 
     companion object {
-        private const val UPDATE_DIR = "updates"
-        private const val UPDATE_APK = "update.apk"
-
         fun factory(context: Context): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = context.applicationContext as App
@@ -371,8 +332,7 @@ class SettingsViewModel(
                     db = app.container.db,
                     graphClient = app.container.graphClient,
                     authManager = app.container.authManager,
-                    updateChecker = app.container.updateChecker,
-                    updateApplier = app.container.updateApplier,
+                    updateManager = app.container.updateManager,
                 )
             }
         }
