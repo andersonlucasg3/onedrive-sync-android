@@ -58,7 +58,7 @@ class Executor(
 
     private suspend fun run(action: Action, pair: Pair, view: PairView, remoteIds: MutableMap<String, String>) {
         when (action) {
-            is Action.CreateFolderRemote -> createFolderRemote(action, pair, remoteIds)
+            is Action.CreateFolderRemote -> createFolderRemote(action, pair, view, remoteIds)
             is Action.CreateFolderLocal -> createFolderLocal(action, pair, remoteIds)
             is Action.MoveRemote -> moveRemote(action, pair, remoteIds)
             is Action.MoveLocal -> moveLocal(action, pair)
@@ -68,10 +68,22 @@ class Executor(
         }
     }
 
-    private suspend fun createFolderRemote(action: Action.CreateFolderRemote, pair: Pair, remoteIds: MutableMap<String, String>) {
+    private suspend fun createFolderRemote(
+        action: Action.CreateFolderRemote,
+        pair: Pair,
+        view: PairView,
+        remoteIds: MutableMap<String, String>,
+    ) {
         val parentRel = parentOf(action.relPath)
         val parentId = checkNotNull(remoteIds[parentRel]) { "pasta remota desconhecida: '$parentRel'" }
-        val item = remote.createFolder(parentId, nameOf(action.relPath))
+        val item = try {
+            remote.createFolder(parentId, nameOf(action.relPath))
+        } catch (e: GraphException) {
+            // A crash between the POST and the index write leaves the folder created; "fail" then
+            // answers 409 on every cycle. Adopt the one the view already reports.
+            val existing = if (e.isAlreadyExists()) view.items[action.relPath] else null
+            existing ?: throw e
+        }
         remoteIds[action.relPath] = item.id
         store.upsertEntry(folderEntry(pair, action.relPath, item.id))
     }
@@ -91,6 +103,12 @@ class Executor(
     }
 
     private fun moveLocal(action: Action.MoveLocal, pair: Pair) {
+        // A crash between the rename and rewriteEntries leaves `to` in place and `from` gone: the
+        // move already happened, only the index is stale.
+        if (!local.exists(action.from) && local.exists(action.to)) {
+            rewriteEntries(pair, action.from, action.to)
+            return
+        }
         check(local.move(action.from, action.to)) { "não foi possível mover ${action.from} para ${action.to}" }
         rewriteEntries(pair, action.from, action.to)
     }
@@ -111,6 +129,22 @@ class Executor(
             check(local.move(partRel, relPath)) { "não foi possível finalizar $relPath" }
         }
 
+        // Never index bytes the drive did not hand over: a truncated or corrupted transfer would
+        // look like a local edit next cycle and the planner would upload it over the good copy.
+        val actualSize = dest.length()
+        val expectedSize = item?.size
+        if (expectedSize != null && actualSize != expectedSize) {
+            log("download corrompido em $relPath: esperado $expectedSize bytes, obtido $actualSize")
+            dest.delete()
+            throw IllegalStateException("tamanho inesperado em $relPath (esperado $expectedSize, obtido $actualSize)")
+        }
+        val actualHash = local.hash(relPath)
+        if (remoteHash != null && actualHash != remoteHash) {
+            log("download corrompido em $relPath: hash não confere")
+            dest.delete()
+            throw IllegalStateException("hash não confere em $relPath")
+        }
+
         val remoteMtime = item?.mtimeMs ?: 0
         if (remoteMtime > 0 && !dest.setLastModified(remoteMtime)) log("mtime remoto não aplicado em $relPath")
         store.upsertEntry(
@@ -121,9 +155,9 @@ class Executor(
                 parentRel = parentOf(relPath).ifEmpty { null },
                 name = nameOf(relPath),
                 isDir = false,
-                size = item?.size ?: dest.length(),
+                size = actualSize,
                 mtimeMs = dest.lastModified(),
-                localHash = remoteHash ?: local.hash(relPath),
+                localHash = actualHash,
                 remoteId = action.remoteId,
                 remoteEtag = null,
                 remoteHash = remoteHash,
@@ -228,3 +262,7 @@ private fun parentOf(relPath: String): String = relPath.substringBeforeLast('/',
 private fun nameOf(relPath: String): String = relPath.substringAfterLast('/')
 
 private fun GraphException.isFatal(): Boolean = status == 401 || status == 403 || status == 410
+
+/** Graph answers a create that lost the race with the same name as 409 `nameAlreadyExists`. */
+private fun GraphException.isAlreadyExists(): Boolean =
+    status == 409 || code?.contains("alreadyExists", ignoreCase = true) == true

@@ -34,9 +34,10 @@ android {
 
     buildTypes {
         release {
-            // No device available to smoke-test R8 output, so keep minification off.
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 is on: most of the APK was dead code (material-icons-extended ships every icon).
+            // scripts/verify-release-apk.ps1 guards the classes that must survive shrinking.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

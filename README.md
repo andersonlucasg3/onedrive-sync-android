@@ -87,8 +87,10 @@ Detalhes de arquitetura, schema e chamadas Graph: [`docs/ARCH.md`](docs/ARCH.md)
   registra `ERROR` no log (evita planejar sobre visão parcial do drive).
 - Android sempre pede confirmação na tela do instalador ao aplicar um update; não há instalação
   silenciosa.
-- R8/minify está desligado (sem device para smoke-testar o APK minificado) — o APK tem ~48 MB
-  porque a biblioteca de ícones inteira vai no pacote.
+- R8 (`minify` + `shrinkResources`) está ligado no release: o APK cai de ~48 MB para ~3,5 MB (a
+  `material-icons-extended` sozinha eram ~11 MB, e nenhum ícone dela é usado). Sem device para
+  executar o APK minificado, a garantia local é a suíte JVM + `scripts\verify-release-apk.ps1`
+  (classes críticas presentes no dex) — não é smoke test de execução.
 - Aviso de update ignora pré-releases: a release `vX.Y.Z-beta.N` é publicada como pré-release e o
   endpoint `/releases/latest` não a retorna — de propósito.
 
@@ -127,6 +129,20 @@ $env:KEY_PASSWORD = "<keyPassword>"
 ```
 
 Sem `KEYSTORE_PATH` o release é gerado **não assinado** (`app-release-unsigned.apk`).
+
+Verificação offline do release (sem device) — roda depois do `assembleRelease`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify-release-apk.ps1
+```
+
+O script inspeciona o APK com `apkanalyzer dex packages --defined-only` e falha (exit 1) se alguma
+classe crítica do R8 tiver sumido (`App`, `MainActivity`, `SyncEngine`, `GraphClient`, `SyncWorker`,
+`UpdateChecker` e os `$$serializer` dos DTOs); com `aapt2 dump resources` falha também se um recurso
+necessário tiver sido removido pelo `shrinkResources` (ex.: `drawable/ic_notification`, que o
+shrinker não enxerga por vir de uma `const val` — ver `app/src/main/res/raw/keep.xml`). Também
+imprime tamanho do APK, breakdown do dex (`classes*.dex` / `resources.arsc`) e o certificado via
+`apksigner verify --print-certs`. Aceita `-Apk <caminho>` e `-Sdk <caminho do Android SDK>`.
 
 ## Versionamento
 

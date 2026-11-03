@@ -43,6 +43,31 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
     /** Makes the next [deltaPage] fail with 410 Gone, as Graph does for an expired cursor. */
     var failNextDeltaWithGone = false
 
+    private var failDownloadId: String? = null
+    private var corruptDownloadId: String? = null
+    private var truncateDownloadId: String? = null
+    private var failCreateFolder = false
+
+    /** Makes the next [download] of [remoteId] fail with a transient error, as a timeout would. */
+    fun failNextDownload(remoteId: String) {
+        failDownloadId = remoteId
+    }
+
+    /** Makes the next [download] of [remoteId] hand over wrong bytes of the same size. */
+    fun corruptNextDownload(remoteId: String) {
+        corruptDownloadId = remoteId
+    }
+
+    /** Makes the next [download] of [remoteId] hand over one byte less, as a cut transfer would. */
+    fun truncateNextDownload(remoteId: String) {
+        truncateDownloadId = remoteId
+    }
+
+    /** Makes the next [createFolder] answer 409, as when the folder was already created remotely. */
+    fun failNextCreateFolder() {
+        failCreateFolder = true
+    }
+
     init {
         nodes[rootId] = Node(rootId, rootId, "", true, ByteArray(0), 0)
     }
@@ -78,9 +103,22 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
     override suspend fun download(remoteId: String, dest: File, onProgress: (Long, Long) -> Unit) {
         val node = requireNode(remoteId)
         calls += Call.Download(remoteId, dest.name)
+        if (failDownloadId == remoteId) {
+            failDownloadId = null
+            throw GraphException(status = 500, code = "generalException", message = "download failed")
+        }
+        var bytes = node.bytes
+        if (corruptDownloadId == remoteId) {
+            corruptDownloadId = null
+            bytes = bytes.copyOf()
+            if (bytes.isNotEmpty()) bytes[0] = (bytes[0].toInt() xor 0xFF).toByte()
+        } else if (truncateDownloadId == remoteId) {
+            truncateDownloadId = null
+            bytes = bytes.copyOf((bytes.size - 1).coerceAtLeast(0))
+        }
         dest.parentFile?.mkdirs()
-        dest.writeBytes(node.bytes)
-        onProgress(node.bytes.size.toLong(), node.bytes.size.toLong())
+        dest.writeBytes(bytes)
+        onProgress(bytes.size.toLong(), bytes.size.toLong())
     }
 
     override suspend fun upload(
@@ -105,6 +143,10 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
     override suspend fun createFolder(parentRemoteId: String, name: String): RemoteItem {
         calls += Call.CreateFolder(parentRemoteId, name)
         requireNode(parentRemoteId)
+        if (failCreateFolder) {
+            failCreateFolder = false
+            throw GraphException(status = 409, code = "nameAlreadyExists", message = "name already exists")
+        }
         val existing = nodes.values.firstOrNull { it.parentId == parentRemoteId && it.name == name && it.isDir }
         val node = existing ?: Node("r${++nextId}", parentRemoteId, name, true, ByteArray(0), 0)
             .also { nodes[it.id] = it }

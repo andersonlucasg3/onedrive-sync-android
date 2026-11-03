@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -373,6 +374,131 @@ class SyncEngineTest {
         assertTrue(File(two.localB, "b.txt").isFile)
     }
 
+    @Test
+    fun `a failed download keeps the delta cursor and is retried on the next cycle`() {
+        remote.addFile("a.txt", "conteudo")
+        remote.failNextDownload(remote.idOf("a.txt"))
+
+        runSync()
+
+        assertNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertFalse(File(root, "a.txt").exists())
+        assertTrue(store.entriesOf(PAIR).isEmpty())
+
+        runSync()
+
+        assertEquals("conteudo", File(root, "a.txt").readText())
+        assertNotNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+    }
+
+    @Test
+    fun `a failed first cycle leaves the new pair unsynced and the next one enumerates fully`() {
+        remote.addFolder("A")
+        remote.addFile("A/a.txt", "alfa")
+        val local = File(root, "a").apply { mkdirs() }
+        val store = FakeIndexStore(listOf(pairOf(PAIR, remote.idOf("A"), local)))
+        val engine = engineFor(store, remote)
+        remote.failNextDownload(remote.idOf("A/a.txt"))
+
+        runBlocking { engine.syncAll() }
+
+        assertNull(store.getPair(PAIR)?.lastSyncAt)
+        assertNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertFalse(File(local, "a.txt").exists())
+
+        runBlocking { engine.syncAll() }
+
+        assertEquals(listOf<String?>(null, null), remote.deltaCursors())
+        assertEquals("alfa", File(local, "a.txt").readText())
+        assertNotNull(store.getPair(PAIR)?.lastSyncAt)
+    }
+
+    @Test
+    fun `a corrupted download leaves no entry or file and is retried`() {
+        remote.addFile("a.txt", "conteudo")
+        remote.corruptNextDownload(remote.idOf("a.txt"))
+
+        runSync()
+
+        assertNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertFalse(File(root, "a.txt").exists())
+        assertTrue(store.entriesOf(PAIR).isEmpty())
+
+        runSync()
+
+        assertEquals("conteudo", File(root, "a.txt").readText())
+        assertEquals(hashBytes("conteudo".toByteArray()), store.entriesOf(PAIR).single().localHash)
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Upload })
+    }
+
+    @Test
+    fun `a truncated download is rejected by size and is retried`() {
+        remote.addFile("a.txt", "conteudo")
+        remote.truncateNextDownload(remote.idOf("a.txt"))
+
+        runSync()
+
+        assertNull(store.stateOf(SyncEngine.KEY_DELTA_LINK))
+        assertFalse(File(root, "a.txt").exists())
+        assertTrue(store.entriesOf(PAIR).isEmpty())
+
+        runSync()
+
+        assertEquals("conteudo", File(root, "a.txt").readText())
+    }
+
+    @Test
+    fun `create folder that already exists remotely is adopted and is not a failure`() {
+        val folderId = remote.addFolder("Docs")
+        remote.failNextCreateFolder()
+        val plan = Plan(listOf(Action.CreateFolderRemote("Docs")), emptyList(), emptyList())
+
+        val stats = runBlocking {
+            val item = remote.getItem(folderId)
+            val view = PairView(items = mapOf("Docs" to item), deletedIds = emptySet())
+            executor().execute(plan, pair(), view) { _, _, _ -> }
+        }
+
+        assertEquals(0, stats.failed)
+        assertEquals(1, stats.done)
+        assertEquals(folderId, store.entriesOf(PAIR).single { it.relPath == "Docs" }.remoteId)
+    }
+
+    @Test
+    fun `move local whose source was already renamed only rewrites the index`() {
+        remote.addFile("a.txt", "conteudo")
+        runSync()
+        val indexed = store.entriesOf(PAIR).single { it.relPath == "a.txt" }
+        assertTrue(fs.move("a.txt", "b.txt")) // crash window: rename done, index not rewritten
+        val plan = Plan(listOf(Action.MoveLocal("a.txt", "b.txt")), emptyList(), emptyList())
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(0, stats.failed)
+        val moved = store.entriesOf(PAIR).single()
+        assertEquals("b.txt", moved.relPath)
+        assertEquals(indexed.remoteId, moved.remoteId)
+        assertTrue(File(root, "b.txt").isFile)
+    }
+
+    @Test
+    fun `a healthy cycle advances the delta cursor`() {
+        remote.addFile("a.txt", "x")
+        runSync()
+        val first = store.stateOf(SyncEngine.KEY_DELTA_LINK)
+        assertNotNull(first)
+
+        remote.addFile("b.txt", "y")
+        runSync()
+
+        val second = store.stateOf(SyncEngine.KEY_DELTA_LINK)
+        assertNotNull(second)
+        assertNotEquals(first, second)
+        assertEquals("y", File(root, "b.txt").readText())
+    }
+
     /** Two pairs over two distinct remote folders and local directories. */
     private class TwoPairs(
         val remote: FakeRemoteApi,
@@ -398,6 +524,8 @@ class SyncEngineTest {
 
     private fun engineFor(store: FakeIndexStore, remote: FakeRemoteApi): SyncEngine =
         SyncEngine(store, remote, { pair -> FileLocalFs(File(pair.localPath)) }, { NOW })
+
+    private fun executor(): Executor = Executor(remote, fs, store) { NOW }
 
     private fun pairOf(id: Long, remoteId: String, localDir: File): Pair = Pair(
         id = id,

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Resource-shrinker exceptions.
+
+  `Notifier` uses `R.drawable.ic_notification` through a `const val`, so Kotlin inlines the resource
+  id at compile time and the dex holds a bare integer: the shrinker sees no reference and deletes the
+  drawable. Without it, no notification can be posted (progress, errors, pending, update).
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_notification" />

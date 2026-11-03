@@ -134,6 +134,39 @@ jobs:
           fi
           ls -lh OneDriveSync-*.apk
 
+      - name: Verificar classes críticas no APK (R8)
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          ANALYZER="$(ls "$SDK"/cmdline-tools/*/bin/apkanalyzer 2>/dev/null | head -n1 || true)"
+          if [ -z "$ANALYZER" ]; then
+            echo "::warning::apkanalyzer não encontrado; pulando a verificação de classes"
+            exit 0
+          fi
+          DUMP="$RUNNER_TEMP/dex-packages.txt"
+          "$ANALYZER" dex packages --defined-only "OneDriveSync-${VERSION}.apk" > "$DUMP"
+          missing=0
+          for cls in \
+            com.anderson.onedrivesync.App \
+            com.anderson.onedrivesync.ui.MainActivity \
+            com.anderson.onedrivesync.sync.SyncEngine \
+            com.anderson.onedrivesync.graph.GraphClient \
+            com.anderson.onedrivesync.work.SyncWorker \
+            com.anderson.onedrivesync.work.SyncService \
+            com.anderson.onedrivesync.work.BootReceiver \
+            com.anderson.onedrivesync.update.UpdateChecker \
+            com.anderson.onedrivesync.hyperos.HyperOsPermissions \
+            'com.anderson.onedrivesync.graph.DeltaPage$$serializer' \
+            'com.anderson.onedrivesync.auth.TokenResponse$$serializer'; do
+            if ! grep -qF "com.anderson.onedrivesync.${cls#com.anderson.onedrivesync.}" "$DUMP"; then
+              echo "::error::R8 removeu a classe $cls do APK de release"
+              missing=1
+            fi
+          done
+          if [ "$missing" = "1" ]; then exit 1; fi
+          echo "Classes críticas presentes."
+          ls -l "OneDriveSync-${VERSION}.apk"
+
       - name: Publicar release
         uses: softprops/action-gh-release@v2
         with:

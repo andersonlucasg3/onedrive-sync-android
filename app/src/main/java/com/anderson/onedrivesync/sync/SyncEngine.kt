@@ -137,9 +137,17 @@ class SyncEngine(
                     pending += stats.pending
                     conflicts += stats.conflicts
                 }
-                // Only advance when the enumeration reached its delta link; a truncated or failed
-                // cycle must replay the same page range next time.
-                if (delta.deltaLink != null) store.setState(KEY_DELTA_LINK, delta.deltaLink)
+                // Only advance when the enumeration reached its delta link and no action failed. A
+                // failed action leaves the remote item unchanged, so it never comes back in a later
+                // delta and would be lost. Replaying the same window is safe (planner and executor
+                // are idempotent) and the delta from the same token is cumulative.
+                if (delta.deltaLink != null) {
+                    if (failed == 0) {
+                        store.setState(KEY_DELTA_LINK, delta.deltaLink)
+                    } else {
+                        log("$failed falha(s) no ciclo: cursor delta mantido para repetir a mesma janela")
+                    }
+                }
             } finally {
                 job = null
                 _state.value = SyncState.Idle
@@ -173,7 +181,10 @@ class SyncEngine(
 
         val newPending = persistPending(pending)
         val newConflicts = persistConflicts(plan.conflicts)
-        store.touchPair(pair.id, clock())
+        // A new pair stays "never synced" until a clean cycle, so the next attempt still forces a
+        // full enumeration: holding the cursor alone would replay only the changes after the old
+        // token, and items that did not change would never come back for this pair.
+        if (stats.failed == 0) store.touchPair(pair.id, clock())
         if (newPending.isNotEmpty() || newConflicts.isNotEmpty()) onNotify(newPending, newConflicts)
         return PairStats(stats.done, stats.failed, newPending.size, newConflicts.size)
     }
