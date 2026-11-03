@@ -55,12 +55,25 @@ android {
         // Settings shows BuildConfig.VERSION_NAME; AGP 9 keeps it off by default.
         buildConfig = true
     }
+
+    // Robolectric needs the merged manifest and resources of the app under test on the JVM.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_17
     }
+}
+
+// Robolectric 4.17 on SDK 36 backs FileDescriptor through jdk.internal.access.SharedSecrets, which
+// java.base does not export to the unnamed module of the test JVM.
+tasks.withType<Test>().configureEach {
+    jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
 }
 
 dependencies {
@@ -84,6 +97,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.mockwebserver)
+    testImplementation(libs.robolectric)
 
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.espresso.core)
