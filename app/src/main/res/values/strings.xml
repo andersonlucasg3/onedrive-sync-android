@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OneDrive Sync</string>
+    <string name="app_title">OneDrive Sync</string>
+    <string name="app_placeholder">A sincronização será configurada nas próximas etapas.</string>
+</resources>

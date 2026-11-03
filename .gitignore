@@ -8,6 +8,8 @@ local.properties
 
 # Log/OS Files
 *.log
+.DS_Store
+Thumbs.db
 
 # Android Studio generated files and folders
 captures/
@@ -24,9 +26,11 @@ misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
 
-# Keystore files
+# Keystore files — NUNCA commitar (a chave de release vive no secret do GitHub Actions)
 *.jks
 *.keystore
+keystore.properties
+.secrets/
 
 # Google Services (e.g. APIs or Firebase)
 google-services.json
