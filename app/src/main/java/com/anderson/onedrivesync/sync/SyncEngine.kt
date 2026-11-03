@@ -156,7 +156,6 @@ class SyncEngine(
                 throw e
             } finally {
                 job = null
-                _state.value = SyncState.Idle
                 if (!canceled) {
                     val result = CycleResult(
                         finishedAt = clock(),
@@ -169,12 +168,14 @@ class SyncEngine(
                         error = error,
                     )
                     outcome = result
+                    // Persist before Idle: observers reload the cards as soon as the state turns Idle.
                     store.setState(CycleResultKeys.GLOBAL, encodeCycleResult(result))
                     logInfo(
                         "fim do ciclo: ok=$done falhas=$failed, pendências=$pending, conflitos=$conflicts" +
                             (error?.let { ", erro: $it" } ?: ""),
                     )
                 }
+                _state.value = SyncState.Idle
             }
         }
         return outcome

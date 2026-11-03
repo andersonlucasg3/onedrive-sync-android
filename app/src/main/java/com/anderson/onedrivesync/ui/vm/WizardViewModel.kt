@@ -12,6 +12,7 @@ import com.anderson.onedrivesync.R
 import com.anderson.onedrivesync.auth.AuthRequiredException
 import com.anderson.onedrivesync.db.Db
 import com.anderson.onedrivesync.db.PairsDao
+import com.anderson.onedrivesync.graph.DriveItem
 import com.anderson.onedrivesync.graph.GraphClient
 import com.anderson.onedrivesync.work.Scheduler
 import com.anderson.onedrivesync.work.SyncService
@@ -49,6 +50,8 @@ data class WizardUiState(
     val remoteResolving: Boolean = false,
     val remoteError: String? = null,
     val remoteAuthRequired: Boolean = false,
+    val remoteNextLink: String? = null,
+    val remoteLoadingMore: Boolean = false,
     val chosenRemote: RemoteFolder? = null,
     val storageRoot: String = "",
     val localPath: String = "",
@@ -65,10 +68,15 @@ data class WizardUiState(
 
     val canGoUpRemote: Boolean get() = remoteStack.size > 1
 
-    /** The root is selectable too: [chooseRemote] resolves its item id first. */
-    val canChooseRemote: Boolean get() = !remoteLoading && !remoteResolving && remoteError == null
+    /**
+     * Selecting never waits for the listing: the browsed folder is known before its children are.
+     * Only the root-id resolution in flight blocks a retap, because it is the selection itself.
+     */
+    val canChooseRemote: Boolean get() = !remoteResolving
 
-    val remoteEmpty: Boolean get() = !remoteLoading && !remoteResolving && remoteError == null && remoteItems.isEmpty()
+    val remoteEmpty: Boolean
+        get() = !remoteLoading && !remoteResolving && remoteError == null &&
+            remoteItems.isEmpty() && remoteNextLink == null
 
     val canGoUpLocal: Boolean
         get() = localPath.isNotEmpty() && storageRoot.isNotEmpty() && localPath != storageRoot
@@ -106,6 +114,11 @@ class WizardViewModel(
     private var remoteJob: Job? = null
     private var localJob: Job? = null
 
+    /** Children already fetched per folder id, so going back to a parent never re-downloads it. */
+    private val remoteCache = HashMap<String, CachedChildren>()
+
+    private class CachedChildren(val items: List<RemoteEntry>, val nextLink: String?)
+
     init {
         loadRemote(null)
     }
@@ -125,6 +138,8 @@ class WizardViewModel(
     }
 
     fun retryRemote() {
+        // A retry must hit the network even when a previous page is cached.
+        remoteCache.remove(cacheKey(_state.value.currentRemote.id))
         loadRemote(_state.value.currentRemote.id)
     }
 
@@ -138,7 +153,7 @@ class WizardViewModel(
         }
         // The browsed root has no item id, so resolve it before writing the pair.
         remoteJob?.cancel()
-        _state.update { it.copy(remoteResolving = true, remoteError = null, remoteAuthRequired = false) }
+        _state.update { it.copy(remoteResolving = true, remoteLoadingMore = false, remoteError = null, remoteAuthRequired = false) }
         remoteJob = viewModelScope.launch {
             try {
                 val root = graphClient.rootItem()
@@ -256,14 +271,28 @@ class WizardViewModel(
 
     private fun loadRemote(itemId: String?) {
         remoteJob?.cancel()
-        _state.update { it.copy(remoteLoading = true, remoteResolving = false, remoteError = null, remoteAuthRequired = false) }
+        val key = cacheKey(itemId)
+        val cached = remoteCache[key]
+        _state.update {
+            it.copy(
+                remoteLoading = cached == null,
+                remoteLoadingMore = false,
+                remoteResolving = false,
+                remoteError = null,
+                remoteAuthRequired = false,
+                remoteItems = cached?.items.orEmpty(),
+                remoteNextLink = cached?.nextLink,
+            )
+        }
+        if (cached != null) return
         remoteJob = viewModelScope.launch {
             try {
-                val items = graphClient.children(itemId)
-                    .filter { it.folder != null }
-                    .mapNotNull { item -> item.name?.let { name -> RemoteEntry(item.id, name) } }
-                    .sortedBy { it.name.lowercase(Locale.ROOT) }
-                _state.update { it.copy(remoteLoading = false, remoteItems = items) }
+                val page = graphClient.childrenPage(itemId)
+                val entries = folderEntries(page.items)
+                remoteCache[key] = CachedChildren(entries, page.nextLink)
+                _state.update {
+                    it.copy(remoteLoading = false, remoteItems = entries, remoteNextLink = page.nextLink)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AuthRequiredException) {
@@ -284,6 +313,53 @@ class WizardViewModel(
             }
         }
     }
+
+    /** Next children page of the current folder; the select button stays usable meanwhile. */
+    fun loadMoreRemote() {
+        val state = _state.value
+        val nextLink = state.remoteNextLink ?: return
+        if (state.remoteLoadingMore || state.remoteResolving) return
+        val itemId = state.currentRemote.id
+        val key = cacheKey(itemId)
+        _state.update { it.copy(remoteLoadingMore = true, remoteError = null) }
+        remoteJob = viewModelScope.launch {
+            try {
+                val page = graphClient.childrenPage(itemId, nextLink)
+                val merged = (_state.value.remoteItems + folderEntries(page.items))
+                    .distinctBy { it.id }
+                    .sortedBy { it.name.lowercase(Locale.ROOT) }
+                remoteCache[key] = CachedChildren(merged, page.nextLink)
+                _state.update {
+                    it.copy(remoteLoadingMore = false, remoteItems = merged, remoteNextLink = page.nextLink)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AuthRequiredException) {
+                _state.update {
+                    it.copy(
+                        remoteLoadingMore = false,
+                        remoteAuthRequired = true,
+                        remoteError = context.getString(R.string.auth_required),
+                    )
+                }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(
+                        remoteLoadingMore = false,
+                        remoteError = e.message ?: context.getString(R.string.wizard_remote_error),
+                    )
+                }
+            }
+        }
+    }
+
+    /** Only folders are browsable; files in the listing are dropped. */
+    private fun folderEntries(items: List<DriveItem>): List<RemoteEntry> =
+        items.filter { it.folder != null }
+            .mapNotNull { item -> item.name?.let { name -> RemoteEntry(item.id, name) } }
+            .sortedBy { it.name.lowercase(Locale.ROOT) }
+
+    private fun cacheKey(itemId: String?): String = itemId ?: ROOT_CACHE_KEY
 
     private fun loadLocal(dir: File) {
         localJob?.cancel()
@@ -316,6 +392,9 @@ class WizardViewModel(
             ?.toList()
 
     companion object {
+        /** Cache key of the drive root, which browses with a null id until it is chosen. */
+        private const val ROOT_CACHE_KEY = "\u0000root"
+
         @Suppress("DEPRECATION") // MANAGE_EXTERNAL_STORAGE + java.io.File is the chosen design (ARCH).
         private fun storageRootPath(): String = Environment.getExternalStorageDirectory().absolutePath
 

@@ -5,6 +5,10 @@ import com.anderson.onedrivesync.db.Pair
 import com.anderson.onedrivesync.db.PendingKind
 import java.io.File
 import java.nio.file.Files
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -678,6 +682,30 @@ class SyncEngineTest {
         assertEquals(1, global.downloaded)
         assertEquals(0, global.uploaded)
         assertEquals(0, global.failed)
+    }
+
+    @Test
+    fun `the global result is already stored when the state becomes idle`() {
+        remote.addFile("a.txt", "conteudo")
+        // Unconfined: every emission is observed synchronously, at the exact point it is set.
+        val globalAtIdle = mutableListOf<String?>()
+        val collector = CoroutineScope(Dispatchers.Unconfined).launch {
+            engine.state.collect { syncState ->
+                if (syncState is SyncState.Idle) globalAtIdle += store.stateOf(CycleResultKeys.GLOBAL)
+            }
+        }
+        try {
+            runSync()
+        } finally {
+            collector.cancel()
+        }
+
+        // First observation is the initial Idle; the last one is the end of the cycle.
+        assertEquals(2, globalAtIdle.size)
+        assertNull(globalAtIdle.first())
+        val result = checkNotNull(decodeCycleResult(globalAtIdle.last()))
+        assertTrue(result.ok)
+        assertEquals(1, result.downloaded)
     }
 
     @Test

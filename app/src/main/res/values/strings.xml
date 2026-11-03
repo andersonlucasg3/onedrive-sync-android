@@ -113,6 +113,7 @@
     <string name="wizard_title_confirm">Confirmar par</string>
     <string name="wizard_up">Subir um nível</string>
     <string name="wizard_use_remote">Usar esta pasta</string>
+    <string name="wizard_load_more">Carregar mais</string>
     <string name="wizard_use_local">Usar esta pasta</string>
     <string name="wizard_empty_title">Nenhuma subpasta</string>
     <string name="wizard_remote_empty_message">Crie uma pasta no OneDrive para sincronizá-la.</string>

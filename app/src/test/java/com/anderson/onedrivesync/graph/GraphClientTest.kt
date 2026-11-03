@@ -84,6 +84,75 @@ class GraphClientTest {
     }
 
     @Test
+    fun `children page fetches the first page without a skip token`() = runBlocking {
+        server.enqueue(json("""{"value":[{"id":"F!1","name":"Docs","folder":{}}]}"""))
+
+        val page = client.childrenPage("PARENT!1")
+
+        assertEquals(listOf("F!1"), page.items.map { it.id })
+        assertNull(page.nextLink)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals(
+            listOf("v1.0", "me", "drive", "items", "PARENT!1", "children"),
+            request.requestUrl?.pathSegments,
+        )
+        assertNull(request.requestUrl?.encodedQuery)
+        assertNull(request.requestUrl?.queryParameter("\$skiptoken"))
+    }
+
+    @Test
+    fun `children page of the root uses the root children url`() = runBlocking {
+        server.enqueue(json("""{"value":[]}"""))
+
+        val page = client.childrenPage(null)
+
+        assertTrue(page.items.isEmpty())
+        assertNull(page.nextLink)
+        assertEquals(
+            listOf("v1.0", "me", "drive", "root", "children"),
+            server.takeRequest().requestUrl?.pathSegments,
+        )
+    }
+
+    @Test
+    fun `children page replays the absolute next link unchanged`() = runBlocking {
+        val nextLink = server.url("/v1.0/me/drive/items/PARENT!1/children")
+            .newBuilder()
+            .addQueryParameter("\$skiptoken", "page-2")
+            .build()
+            .toString()
+        server.enqueue(json("""{"value":[{"id":"F!2","name":"Fotos","folder":{}}]}"""))
+
+        val page = client.childrenPage("PARENT!1", nextLink)
+
+        assertEquals(listOf("F!2"), page.items.map { it.id })
+        assertNull(page.nextLink)
+        assertEquals(nextLink, server.takeRequest().requestUrl.toString())
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `children page parses the next link of a partial listing`() = runBlocking {
+        val nextLink = server.url("/v1.0/me/drive/root/children")
+            .newBuilder()
+            .addQueryParameter("\$skiptoken", "page-2")
+            .build()
+            .toString()
+        server.enqueue(
+            json("""{"value":[{"id":"F!1","name":"Docs","folder":{}}],"@odata.nextLink":"$nextLink"}"""),
+        )
+
+        val page = client.childrenPage(null)
+
+        assertEquals(nextLink, page.nextLink)
+        assertEquals(
+            listOf("v1.0", "me", "drive", "root", "children"),
+            server.takeRequest().requestUrl?.pathSegments,
+        )
+    }
+
+    @Test
     fun `delta root requests drive root delta`() = runBlocking {
         server.enqueue(json("""{"value":[]}"""))
 

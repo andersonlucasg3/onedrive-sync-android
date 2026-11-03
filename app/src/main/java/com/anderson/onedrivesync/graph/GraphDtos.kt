@@ -68,6 +68,12 @@ data class DeltaPage(
     @SerialName("@odata.deltaLink") val deltaLink: String? = null,
 )
 
+/** One page of a folder listing: [nextLink] is null once Graph reports no further page. */
+data class ChildrenPage(
+    val items: List<DriveItem>,
+    val nextLink: String?,
+)
+
 @Serializable
 data class DriveUser(
     val displayName: String? = null,

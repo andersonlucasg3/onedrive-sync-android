@@ -59,21 +59,33 @@ class GraphClient(
             .use { it.decode() }
     }
 
-    suspend fun children(itemId: String?): List<DriveItem> = withContext(Dispatchers.IO) {
-        val items = mutableListOf<DriveItem>()
-        var pageUrl = if (itemId == null) {
-            url("me", "drive", "root", "children")
-        } else {
-            url("me", "drive", "items", itemId, "children")
+    /**
+     * A single children page. The first page uses the folder URL as-is (Graph's default `$top`);
+     * [nextLink], when given, is replayed unchanged so `$skiptoken` and `$top` come from Graph.
+     */
+    suspend fun childrenPage(itemId: String?, nextLink: String? = null): ChildrenPage =
+        withContext(Dispatchers.IO) {
+            val pageUrl = nextLink?.toHttpUrl() ?: if (itemId == null) {
+                url("me", "drive", "root", "children")
+            } else {
+                url("me", "drive", "items", itemId, "children")
+            }
+            val page: DeltaPage = send { token -> authorized(pageUrl, token).get().build() }.use { it.decode() }
+            ChildrenPage(items = page.value, nextLink = page.nextLink)
         }
+
+    /** All children, following `@odata.nextLink` up to [MAX_PAGES]. Same cap as before pagination. */
+    suspend fun children(itemId: String?): List<DriveItem> {
+        val items = mutableListOf<DriveItem>()
+        var nextLink: String? = null
         var pages = 0
         while (pages < MAX_PAGES) {
-            val page: DeltaPage = send { token -> authorized(pageUrl, token).get().build() }.use { it.decode() }
-            items += page.value
+            val page = childrenPage(itemId, nextLink)
+            items += page.items
             pages++
-            pageUrl = page.nextLink?.toHttpUrl() ?: break
+            nextLink = page.nextLink ?: break
         }
-        items
+        return items
     }
 
     suspend fun deltaRoot(deltaLink: String? = null): DeltaPage {

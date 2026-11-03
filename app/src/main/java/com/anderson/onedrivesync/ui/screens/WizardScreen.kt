@@ -6,11 +6,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -22,6 +24,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -141,6 +144,14 @@ private fun RemoteStep(
                 else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(state.remoteItems, key = { entry -> entry.id }) { entry ->
                         FolderRow(name = entry.name, onClick = { viewModel.enterRemote(entry) })
+                    }
+                    if (state.remoteNextLink != null) {
+                        item(key = "load-more") {
+                            LoadMoreRow(
+                                loading = state.remoteLoadingMore,
+                                onClick = viewModel::loadMoreRemote,
+                            )
+                        }
                     }
                 }
             }
@@ -273,6 +284,23 @@ private fun ConfirmStep(state: WizardUiState, viewModel: WizardViewModel) {
                 ),
             )
         }
+    }
+}
+
+@Composable
+private fun LoadMoreRow(loading: Boolean, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        enabled = !loading,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp),
+    ) {
+        if (loading) {
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+        Text(stringResource(R.string.wizard_load_more))
     }
 }
 
