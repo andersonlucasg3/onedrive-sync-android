@@ -92,6 +92,7 @@ class AppContainer(context: Context) {
             applier = updateApplier,
             prefs = prefs,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            log = { message -> indexStore.log(System.currentTimeMillis(), "WARN", "Update", message) },
         )
     }
 }

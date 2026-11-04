@@ -747,6 +747,107 @@ class SyncEngineTest {
     }
 
     @Test
+    fun `a folder that exists remotely but is neither in the index nor the view is resolved by path`() {
+        // The field bug: the folder exists, the create answers 409, and the delta never reports a
+        // folder that did not change, so only a by-path lookup can recover its id.
+        val folderId = remote.addFolder("60 anos mamãe")
+        remote.failNextCreateFolder()
+        File(root, "60 anos mamãe").mkdirs()
+        File(root, "60 anos mamãe/IMG_6938.MOV").writeText("video")
+        val plan = Plan(
+            listOf(Action.Upload("60 anos mamãe/IMG_6938.MOV", "60 anos mamãe")),
+            emptyList(),
+            emptyList(),
+        )
+        remote.clearCalls()
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(0, stats.failed)
+        assertEquals(1, stats.done)
+        val resolved = remote.calls.filterIsInstance<FakeRemoteApi.Call.ResolveChild>().single()
+        assertEquals(remote.rootId, resolved.parentId)
+        assertEquals("60 anos mamãe", resolved.name)
+        assertEquals(folderId, remote.calls.filterIsInstance<FakeRemoteApi.Call.Upload>().single().parentId)
+        assertEquals("video", remote.textOf("60 anos mamãe/IMG_6938.MOV"))
+        val entry = store.entriesOf(PAIR).single { it.relPath == "60 anos mamãe" }
+        assertEquals(folderId, entry.remoteId)
+        assertTrue(entry.isDir)
+        assertTrue(
+            store.logs.contains("INFO Executor: pasta remota '60 anos mamãe' já existia (id via caminho)"),
+        )
+    }
+
+    @Test
+    fun `a create folder remote that finds no folder by path still fails naming it`() {
+        // Nothing exists remotely: the 409 cannot be resolved, so the previous behaviour stands.
+        remote.failNextCreateFolder()
+        val plan = Plan(listOf(Action.CreateFolderRemote("Nova")), emptyList(), emptyList())
+        remote.clearCalls()
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(1, stats.failed)
+        assertEquals(0, stats.done)
+        assertEquals(1, remote.calls.count { it is FakeRemoteApi.Call.ResolveChild })
+        assertTrue(store.logs.any { it.contains("criar pasta remota Nova falhou") })
+        assertTrue(store.entriesOf(PAIR).none { it.relPath == "Nova" })
+    }
+
+    @Test
+    fun `an unresolvable 409 fails only that upload and the sibling still goes up`() {
+        remote.failNextCreateFolder()
+        File(root, "Nova").mkdirs()
+        File(root, "Nova/x.txt").writeText("conteudo")
+        File(root, "ok.txt").writeText("ok")
+        val plan = Plan(
+            listOf(
+                Action.Upload("Nova/x.txt", "Nova"),
+                Action.Upload("ok.txt", null),
+            ),
+            emptyList(),
+            emptyList(),
+        )
+        remote.clearCalls()
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(1, stats.failed)
+        assertEquals(1, stats.done)
+        assertEquals(1, remote.calls.count { it is FakeRemoteApi.Call.ResolveChild })
+        assertFalse(remote.has("Nova/x.txt"))
+        assertTrue(store.logs.any { it.contains("criar pasta remota 'Nova' falhou") })
+        assertTrue(
+            store.logs.any { it.contains("enviar Nova/x.txt falhou") && it.contains("pasta remota desconhecida: 'Nova'") },
+        )
+        assertTrue(remote.has("ok.txt"))
+    }
+
+    @Test
+    fun `create folder remote resolves an existing folder by path when the view lacks it`() {
+        val folderId = remote.addFolder("Docs")
+        remote.failNextCreateFolder()
+        val plan = Plan(listOf(Action.CreateFolderRemote("Docs")), emptyList(), emptyList())
+        remote.clearCalls()
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(0, stats.failed)
+        assertEquals(1, stats.done)
+        assertEquals(folderId, store.entriesOf(PAIR).single { it.relPath == "Docs" }.remoteId)
+        assertEquals("Docs", remote.calls.filterIsInstance<FakeRemoteApi.Call.ResolveChild>().single().name)
+        assertTrue(store.logs.contains("INFO Executor: pasta remota 'Docs' já existia (id via caminho)"))
+    }
+
+    @Test
     fun `remote move creates a missing target folder before moving`() {
         remote.addFile("a.txt", "conteudo")
         runSync()

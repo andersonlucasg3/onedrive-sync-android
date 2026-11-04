@@ -26,4 +26,11 @@ interface RemoteApi {
     suspend fun delete(remoteId: String)
     suspend fun setMtime(remoteId: String, mtimeMs: Long)
     suspend fun getItem(remoteId: String): RemoteItem
+
+    /**
+     * The child of [parentId] named [name], or null when it does not exist. Unlike [getItem] this
+     * needs no id, which is the point: it recovers the id of a folder that a failed create proved
+     * to exist but the delta never reported.
+     */
+    suspend fun resolveChild(parentId: String, name: String): RemoteItem?
 }

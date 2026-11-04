@@ -35,7 +35,7 @@ private fun release(version: String = "1.2.0") = ReleaseInfo(
 /**
  * The update state machine on the JVM: the release endpoint and the APK layer are fakes, so no
  * request leaves the machine and no installer is opened. Only [Prefs] and the cache directory come
- * from Robolectric.
+ * from Robolectric; the APK version reader is a lambda because no real package can be parsed here.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], application = Application::class)
@@ -46,6 +46,9 @@ class UpdateManagerTest {
     private lateinit var applier: FakeApkInstaller
     private var now = 1_000_000L
     private lateinit var manager: UpdateManager
+    private var archiveVersion: String? = "1.2.0"
+    private var archiveVersionProvider: ((File) -> String?)? = null
+    private val logged = mutableListOf<String>()
 
     @Before
     fun setUp() {
@@ -60,6 +63,8 @@ class UpdateManagerTest {
             prefs = prefs,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
             clock = { now },
+            readArchiveVersion = { _, apk -> archiveVersionProvider?.invoke(apk) ?: archiveVersion },
+            log = { logged += it },
         )
     }
 
@@ -175,6 +180,126 @@ class UpdateManagerTest {
         assertEquals(2, checker.calls)
     }
 
+    @Test
+    fun `cached apk with the same size and a different sha256 is downloaded again`() {
+        manager.checkOnLaunch()
+        runBlocking { manager.downloadAndInstall(context) }
+        assertEquals(1, applier.downloads)
+
+        val apk = cacheFile("1.2.0")
+        val trusted = sha256Of(apk)
+        assertEquals(8L, apk.length())
+
+        // Another build with the exact same size: only the digest can tell them apart.
+        apk.writeBytes(ByteArray(8) { 1 })
+        checker.next = release().copy(sha256 = trusted)
+        manager.checkNow()
+
+        runBlocking { manager.downloadAndInstall(context) }
+
+        assertEquals(2, applier.downloads)
+        assertEquals(2, applier.installs)
+        assertEquals(trusted, sha256Of(apk))
+    }
+
+    @Test
+    fun `cached apk with a different size is downloaded again`() {
+        val apk = cacheFile("1.2.0").apply {
+            parentFile?.mkdirs()
+            writeBytes(ByteArray(3))
+        }
+
+        manager.checkOnLaunch()
+        runBlocking { manager.downloadAndInstall(context) }
+
+        assertEquals(1, applier.downloads)
+        assertEquals(1, applier.installs)
+        assertEquals(8L, apk.length())
+    }
+
+    @Test
+    fun `release without sha256 never reuses the cached apk`() {
+        manager.checkOnLaunch()
+        runBlocking { manager.downloadAndInstall(context) }
+        assertEquals(1, applier.downloads)
+
+        runBlocking { manager.downloadAndInstall(context) }
+
+        assertEquals(2, applier.downloads)
+        assertEquals(2, applier.installs)
+    }
+
+    @Test
+    fun `apk whose version differs from the release is downloaded again`() {
+        var reads = 0
+        archiveVersionProvider = { _ -> if (++reads == 1) "1.1.0" else "1.2.0" }
+
+        manager.checkOnLaunch()
+        runBlocking { manager.downloadAndInstall(context) }
+
+        assertEquals(2, applier.downloads)
+        assertEquals(1, applier.installs)
+        assertEquals(
+            listOf("APK em cache não corresponde a 1.2.0 (era 1.1.0): baixando de novo"),
+            logged,
+        )
+        assertTrue(manager.state.value is UpdateState.Available)
+    }
+
+    @Test
+    fun `apk whose version still differs ends in an error without installing`() {
+        archiveVersion = null
+
+        manager.checkOnLaunch()
+        runBlocking { manager.downloadAndInstall(context) }
+
+        val state = manager.state.value
+        assertTrue(state is UpdateState.Error)
+        assertEquals("APK baixado não corresponde à versão 1.2.0", (state as UpdateState.Error).message)
+        assertEquals(2, applier.downloads)
+        assertEquals(0, applier.installs)
+        assertFalse(cacheFile("1.2.0").exists())
+    }
+
+    @Test
+    fun `successful install removes the apks from older versions`() {
+        val stale = cacheFile("1.1.0").apply {
+            parentFile?.mkdirs()
+            writeBytes(ByteArray(4))
+        }
+        val legacy = File(File(context.cacheDir, "updates"), "update.apk").apply {
+            writeBytes(ByteArray(4))
+        }
+
+        manager.checkOnLaunch()
+        runBlocking { manager.downloadAndInstall(context) }
+
+        assertEquals(1, applier.installs)
+        assertFalse(stale.exists())
+        assertFalse(legacy.exists())
+        assertTrue(cacheFile("1.2.0").isFile)
+    }
+
+    @Test
+    fun `apkMatchesRelease requires the exact version`() {
+        assertTrue(apkMatchesRelease("1.2.0", "1.2.0"))
+        assertFalse(apkMatchesRelease(null, "1.2.0"))
+        assertFalse(apkMatchesRelease("1.4.1", "1.2.0"))
+    }
+
+    @Test
+    fun `cache file name is per version and has no path separator`() {
+        assertEquals("update-1.2.0.apk", apkFileName("1.2.0"))
+        assertEquals("update-1.2.0-beta.1.apk", apkFileName("1.2.0-beta.1"))
+        val traversal = apkFileName("../../etc/passwd")
+        assertFalse(traversal.contains('/'))
+        assertFalse(traversal.contains('\\'))
+        assertTrue(traversal.startsWith("update-"))
+    }
+
+    private fun cacheFile(versionName: String): File =
+        File(File(context.cacheDir, "updates"), apkFileName(versionName))
+
     private class FakeReleaseSource(
         var next: ReleaseInfo? = release(),
         override val currentVersion: String = CURRENT,
@@ -189,10 +314,12 @@ class UpdateManagerTest {
 
     private class FakeApkInstaller : ApkInstaller {
         var installs = 0
+        var downloads = 0
         var failure: Exception? = null
         var observe: (() -> Unit)? = null
 
         override suspend fun download(info: ReleaseInfo, dest: File, onProgress: (Long, Long) -> Unit) {
+            downloads++
             observe?.invoke()
             failure?.let { throw it }
             listOf(0L, 50L, 100L).forEach { done ->

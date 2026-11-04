@@ -132,7 +132,11 @@ class Executor(
                 throw e
             } catch (e: Exception) {
                 // Same race as createFolderRemote: the folder exists but the index lost its id.
-                val existing = if (e is GraphException && e.isAlreadyExists()) view.items[current] else null
+                val existing = if (e is GraphException && e.isAlreadyExists()) {
+                    view.items[current] ?: resolveExistingFolder(current, parentId)
+                } else {
+                    null
+                }
                 if (existing == null) {
                     log("criar pasta remota '$current' falhou: ${e.message}")
                     return null
@@ -157,12 +161,28 @@ class Executor(
             remote.createFolder(parentId, nameOf(action.relPath))
         } catch (e: GraphException) {
             // A crash between the POST and the index write leaves the folder created; "fail" then
-            // answers 409 on every cycle. Adopt the one the view already reports.
-            val existing = if (e.isAlreadyExists()) view.items[action.relPath] else null
+            // answers 409 on every cycle. Adopt the one the view already reports, or resolve it by
+            // path when the delta did not report it.
+            val existing = if (e.isAlreadyExists()) {
+                view.items[action.relPath] ?: resolveExistingFolder(action.relPath, parentId)
+            } else {
+                null
+            }
             existing ?: throw e
         }
         remoteIds[action.relPath] = item.id
         store.upsertEntry(folderEntry(pair, action.relPath, item.id))
+    }
+
+    /**
+     * Adopts a folder the drive already has but neither the delta view nor the index knows: a 409
+     * only proves the name exists, and Graph's path addressing turns that name into the real id.
+     * Returns null when the folder does not exist after all; callers keep their previous failure.
+     */
+    private suspend fun resolveExistingFolder(relPath: String, parentId: String): RemoteItem? {
+        val existing = remote.resolveChild(parentId, nameOf(relPath)) ?: return null
+        store.log(clock(), "INFO", TAG, "pasta remota '$relPath' já existia (id via caminho)")
+        return existing
     }
 
     private fun createFolderLocal(action: Action.CreateFolderLocal, pair: Pair, remoteIds: Map<String, String>) {

@@ -72,7 +72,7 @@ class UpdateApplier(private val http: OkHttpClient) : ApkInstaller {
                     throw IOException("tamanho do APK diferente do informado (${partial.length()} != ${info.apkSize})")
                 }
                 val expected = info.sha256
-                if (expected != null && !sha256(partial).equals(expected, ignoreCase = true)) {
+                if (expected != null && !sha256Of(partial).equals(expected, ignoreCase = true)) {
                     throw IOException("hash do APK não confere")
                 }
                 if (!partial.renameTo(dest)) {
@@ -116,21 +116,22 @@ class UpdateApplier(private val http: OkHttpClient) : ApkInstaller {
         }
     }
 
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(BUFFER_BYTES)
-            while (true) {
-                val read = input.read(buffer)
-                if (read == -1) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
-    }
-
     private companion object {
         const val APK_MIME = "application/vnd.android.package-archive"
         const val BUFFER_BYTES = 64 * 1024
     }
+}
+
+/** Lower-case hex SHA-256 of [file]; also used by [UpdateManager] to validate a cached APK. */
+fun sha256Of(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read == -1) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
 }

@@ -365,6 +365,32 @@ class GraphClientTest {
     }
 
     @Test
+    fun `item by path uses path addressing and encodes spaces and accents`() = runBlocking {
+        server.enqueue(json("""{"id":"F!9","name":"60 anos mamãe","folder":{}}"""))
+
+        val item = client.itemByPath("PAI", "60 anos mamãe")
+
+        assertEquals("F!9", item?.id)
+        assertEquals("60 anos mamãe", item?.name)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/v1.0/me/drive/items/PAI:/60%20anos%20mam%C3%A3e", request.requestUrl?.encodedPath)
+        assertEquals("Bearer token-1", request.headers["Authorization"])
+    }
+
+    @Test
+    fun `item by path maps 404 to null instead of throwing`() = runBlocking {
+        server.enqueue(
+            json("""{"error":{"code":"itemNotFound","message":"The resource could not be found."}}""", 404),
+        )
+
+        val item = client.itemByPath("PAI", "ausente")
+
+        assertNull(item)
+        assertEquals("/v1.0/me/drive/items/PAI:/ausente", server.takeRequest().requestUrl?.encodedPath)
+    }
+
+    @Test
     fun `401 forces a single token refresh and retries`() = runBlocking {
         val forced = mutableListOf<Boolean>()
         val retrying = GraphClient(

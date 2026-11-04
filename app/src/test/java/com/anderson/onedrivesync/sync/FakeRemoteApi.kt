@@ -28,6 +28,9 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
         data class Delete(val id: String) : Call
         data class SetMtime(val id: String, val mtimeMs: Long) : Call
         data class GetItem(val id: String) : Call
+
+        /** A by-name lookup under [parentId], as `GraphRemoteApi.resolveChild` does by path. */
+        data class ResolveChild(val parentId: String, val name: String) : Call
     }
 
     private class Node(
@@ -237,6 +240,11 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
     override suspend fun getItem(remoteId: String): RemoteItem {
         calls += Call.GetItem(remoteId)
         return requireNode(remoteId).toRemoteItem()
+    }
+
+    override suspend fun resolveChild(parentId: String, name: String): RemoteItem? {
+        calls += Call.ResolveChild(parentId, name)
+        return nodes.values.firstOrNull { it.parentId == parentId && it.name == name }?.toRemoteItem()
     }
 
     private fun create(path: String, isDir: Boolean, bytes: ByteArray, mtimeMs: Long): String {

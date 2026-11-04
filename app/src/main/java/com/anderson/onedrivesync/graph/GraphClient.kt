@@ -60,6 +60,17 @@ class GraphClient(
     }
 
     /**
+     * Resolves a child of [parentId] by name through Graph's path addressing
+     * (`/me/drive/items/{parentId}:/{name}`). Each segment goes through [url], so spaces,
+     * accents, `#` and `%` are percent-encoded. A 404 means "no such child" and is not an
+     * error; every other failure propagates as [GraphException].
+     */
+    suspend fun itemByPath(parentId: String, name: String): DriveItem? = withContext(Dispatchers.IO) {
+        send { token -> authorized(url("me", "drive", "items", "$parentId:", name), token).get().build() }
+            .use { response -> if (response.code == 404) null else response.decode<DriveItem>() }
+    }
+
+    /**
      * A single children page. The first page uses the folder URL as-is (Graph's default `$top`);
      * [nextLink], when given, is replayed unchanged so `$skiptoken` and `$top` come from Graph.
      */

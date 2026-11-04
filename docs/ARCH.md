@@ -208,10 +208,14 @@ Repo público: `github.com/andersonlucasg3/onedrive-sync-android`.
 - **`/releases/latest` ignora pré-releases.** A beta é publicada com `prerelease: true` (tag com
   `-`), então instalação manual da beta não é avisada de novas betas — comportamento desejado:
   só releases estáveis notificam update.
-- Se houver versão nova: baixa o asset para **`cacheDir/updates/update.apk`** (via
+- Se houver versão nova: baixa o asset para **`cacheDir/updates/update-<versionName>.apk`** (via
   `<arquivo>.part` + rename), confere `size` e o `digest` sha256 do asset quando presente, e
-  dispara o instalador (`ACTION_VIEW` + FileProvider + `REQUEST_INSTALL_PACKAGES`,
-  `FLAG_GRANT_READ_URI_PERMISSION`). Com vários assets, escolhe o maior `.apk`.
+  valida o `versionName` do APK com `getPackageArchiveInfo` antes de abrir o instalador: um APK de
+  outra versão é descartado e baixado de novo. O arquivo em cache só é reaproveitado quando o
+  `sha256` está presente e confere (sem digest, baixa de novo); ao instalar, os APKs de versões
+  anteriores são apagados. Dispara o instalador (`ACTION_VIEW` + FileProvider +
+  `REQUEST_INSTALL_PACKAGES`, `FLAG_GRANT_READ_URI_PERMISSION`). Com vários assets, escolhe o
+  maior `.apk`.
 - Android não permite instalação silenciosa sem device owner/root: o usuário confirma na tela
   do instalador. O app pede "Instalar apps desconhecidos" no onboarding/ao atualizar.
 - Checagem automática 1x/dia (WorkManager) + botão "Buscar atualização" em Settings.

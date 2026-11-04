@@ -66,6 +66,9 @@ class GraphRemoteApi(
     override suspend fun getItem(remoteId: String): RemoteItem =
         call("item $remoteId") { remoteItemOf(client.getItem(remoteId)) }
 
+    override suspend fun resolveChild(parentId: String, name: String): RemoteItem? =
+        call("resolver $name") { client.itemByPath(parentId, name)?.let(::remoteItemOf) }
+
     /** Status plus Graph error code on failure; the response body is never logged. */
     private suspend fun <T> call(op: String, block: suspend () -> T): T = try {
         block()
