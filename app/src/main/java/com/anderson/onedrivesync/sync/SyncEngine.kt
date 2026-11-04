@@ -265,6 +265,7 @@ class SyncEngine(
                     "${pending.size} pendências, ${plan.conflicts.size} conflitos em ${clock() - planStart} ms " +
                     "(remoto: ${view.items.size} itens)",
             )
+            logPathDiagnostics(pair, view, localFiles, plan)
 
             val stats = Executor(remote, fs, store, clock, hashes).execute(plan, pair, view) { step, done, total ->
                 _state.value = SyncState.Running(name, step, done, total, phase = EXEC_PHASE, phases = PHASES)
@@ -605,6 +606,47 @@ class SyncEngine(
 
     private fun logInfo(message: String) = store.log(clock(), "INFO", TAG, message)
 
+    /**
+     * Diagnostic only: shows whether the pair's remote view and local tree share any file path.
+     * Reads `pair`, `view.items`, `localFiles` and `plan` from memory; it never changes the plan,
+     * touches the index or calls the network. The examples are alphabetical so two logs compare.
+     */
+    private fun logPathDiagnostics(pair: Pair, view: PairView, localFiles: List<LocalFile>, plan: Plan) {
+        val uploads = plan.actions.count { it is Action.Upload }
+        val downloads = plan.actions.count { it is Action.Download }
+        // A quiet cycle stays quiet: there is nothing to locate on either side.
+        if (uploads == 0 && downloads == 0) return
+
+        val remoteDirs = view.items.values.count { it.isDir }
+        val remoteFiles = view.items.size - remoteDirs
+        val localFileCount = localFiles.count { !it.isDir }
+        logInfo(
+            "par '${pair.displayName}': remoto=${pair.remoteId.takeLast(8)} " +
+                "(${truncateDiagnosticPath(pair.remotePath)}) " +
+                "local=${truncateDiagnosticPath(pair.localPath)} | " +
+                "view=${view.items.size} itens ($remoteDirs dirs, $remoteFiles arquivos) | " +
+                "local=${localFiles.size} entradas ($localFileCount arquivos)",
+        )
+
+        val remotePaths = view.items.filterValues { !it.isDir }.keys
+        val localPaths = localFiles.asSequence().filter { !it.isDir }.map { it.relPath }.toSet()
+        val intersection = remotePaths.count { it in localPaths }
+        val remoteExamples = remotePaths.sorted().take(3)
+            .joinToString(" | ") { truncateDiagnosticPath(it) }
+        val localExamples = localPaths.sorted().take(3)
+            .joinToString(" | ") { truncateDiagnosticPath(it) }
+        logInfo(
+            "caminhos: remoto[ex]=$remoteExamples local[ex]=$localExamples " +
+                "interseção=$intersection de $localFileCount locais",
+        )
+        if (intersection == 0 && uploads > 0) {
+            log(
+                "nenhum caminho em comum entre remoto e local no par '${pair.displayName}' " +
+                    "(remoto $remoteFiles, local $localFileCount) — verifique a pasta remota escolhida",
+            )
+        }
+    }
+
     private class DeltaFetch(
         val items: List<RemoteItem>,
         val deltaLink: String?,
@@ -654,6 +696,12 @@ class SyncEngine(
 }
 
 private fun parentOf(relPath: String): String = relPath.substringBeforeLast('/', "")
+
+private const val DIAGNOSTIC_PATH_MAX = 80
+
+/** Head of the path, which is what identifies the tree; the tail is the least informative part. */
+private fun truncateDiagnosticPath(path: String): String =
+    if (path.length <= DIAGNOSTIC_PATH_MAX) path else path.take(DIAGNOSTIC_PATH_MAX - 3) + "..."
 
 /** Graph refuses a folder delta with any of these: the pair must use the drive root instead. */
 private fun GraphException.isFolderDeltaUnsupported(): Boolean =

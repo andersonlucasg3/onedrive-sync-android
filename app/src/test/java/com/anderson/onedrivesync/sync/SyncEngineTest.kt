@@ -1035,6 +1035,64 @@ class SyncEngineTest {
     }
 
     @Test
+    fun `diagnostic logs the paths both sides share and three examples of each`() {
+        remote.addFile("a.txt", "igual")
+        remote.addFile("b.txt", "remoto-b")
+        remote.addFile("c.txt", "remoto-c")
+        remote.addFile("d.txt", "remoto-d")
+        File(root, "a.txt").writeText("igual")
+        File(root, "e.txt").writeText("local-e")
+        File(root, "f.txt").writeText("local-f")
+        File(root, "g.txt").writeText("local-g")
+
+        runSync()
+
+        val pairLine = store.logs.single { it.contains("par 'Teste': remoto=") }
+        assertTrue(pairLine.startsWith("INFO SyncEngine: par 'Teste': remoto="))
+        assertTrue(pairLine.contains("view=4 itens (0 dirs, 4 arquivos)"))
+        assertTrue(pairLine.contains("local=4 entradas (4 arquivos)"))
+        val paths = store.logs.single { it.contains("caminhos:") }
+        assertEquals(
+            "INFO SyncEngine: caminhos: remoto[ex]=a.txt | b.txt | c.txt " +
+                "local[ex]=a.txt | e.txt | f.txt interseção=1 de 4 locais",
+            paths,
+        )
+        assertFalse(store.logs.any { it.contains("nenhum caminho em comum") })
+    }
+
+    @Test
+    fun `diagnostic warns when the remote and local paths are disjoint`() {
+        remote.addFile("remoto.txt", "remoto")
+        File(root, "local.txt").writeText("local")
+
+        runSync()
+
+        val paths = store.logs.single { it.contains("caminhos:") }
+        assertTrue(paths.contains("remoto[ex]=remoto.txt"))
+        assertTrue(paths.contains("local[ex]=local.txt"))
+        assertTrue(paths.contains("interseção=0 de 1 locais"))
+        assertEquals(
+            "WARN SyncEngine: nenhum caminho em comum entre remoto e local no par 'Teste' " +
+                "(remoto 1, local 1) — verifique a pasta remota escolhida",
+            store.logs.single { it.contains("nenhum caminho em comum") },
+        )
+    }
+
+    @Test
+    fun `a cycle without actions logs no path examples`() {
+        remote.addFile("a.txt", "conteudo")
+        runSync()
+        val baseline = store.logs.size
+
+        runSync()
+
+        val newLines = store.logs.drop(baseline)
+        assertFalse(newLines.any { it.contains("par 'Teste': remoto=") })
+        assertFalse(newLines.any { it.contains("caminhos:") })
+        assertFalse(newLines.any { it.contains("nenhum caminho em comum") })
+    }
+
+    @Test
     fun `an upload cycle counts only uploads in the result`() {
         runSync()
         File(root, "novo.txt").writeText("olá")
