@@ -32,6 +32,8 @@ class GraphClient(
     private val tokenProvider: suspend (forceRefresh: Boolean) -> String,
     graphBaseUrl: String = DEFAULT_GRAPH_BASE,
     private val http: OkHttpClient = defaultHttpClient(),
+    /** Content transfers reuse [http]'s configuration with the much longer transfer timeouts. */
+    private val transferHttp: OkHttpClient = transferClient(http),
     private val log: (String) -> Unit = {},
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
@@ -116,7 +118,7 @@ class GraphClient(
 
     suspend fun download(itemId: String, dest: File, onProgress: (Long, Long) -> Unit): Unit =
         withContext(Dispatchers.IO) {
-            send { token -> authorized(url("me", "drive", "items", itemId, "content"), token).get().build() }
+            send(transferHttp) { token -> authorized(url("me", "drive", "items", itemId, "content"), token).get().build() }
                 .use { response ->
                     if (!response.isSuccessful) throw response.graphException()
                     val body = response.body
@@ -146,7 +148,7 @@ class GraphClient(
 
     suspend fun uploadSmall(parentId: String, name: String, file: File): DriveItem = withContext(Dispatchers.IO) {
         val body = file.asRequestBody(OCTET_STREAM)
-        send {
+        send(transferHttp) {
             authorized(url("me", "drive", "items", "$parentId:", "$name:", "content"), it).put(body).build()
         }.use { it.decode() }
     }
@@ -160,7 +162,7 @@ class GraphClient(
         val sessionBody = buildJsonObject {
             put("item", buildJsonObject { put(CONFLICT_BEHAVIOR, "replace") })
         }.toString()
-        val session: UploadSession = send {
+        val session: UploadSession = send(transferHttp) {
             authorized(url("me", "drive", "items", "$parentId:", "$name:", "createUploadSession"), it)
                 .post(sessionBody.toRequestBody(JSON_MEDIA))
                 .build()
@@ -178,7 +180,7 @@ class GraphClient(
                 .header("Content-Range", "bytes $offset-${offset + chunkSize - 1}/$total")
                 .put(chunkBody(file, offset, chunkSize))
                 .build()
-            http.newCall(request).execute().use { response ->
+            transferHttp.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw response.graphException()
                 if (response.code == 200 || response.code == 201) {
                     item = graphJson.decodeFromString<DriveItem>(response.body.string())
@@ -190,14 +192,24 @@ class GraphClient(
         item ?: throw GraphException(status = 0, code = null, message = "Upload session returned no item")
     }
 
+    /**
+     * Creates (or adopts) a folder. `replace` makes Graph answer the existing item instead of a 409
+     * when the name is already taken, which is the normal case after a crash between the POST and
+     * the index write. A file owning that name cannot become a folder and is rejected here.
+     */
     suspend fun createFolder(parentId: String, name: String): DriveItem = withContext(Dispatchers.IO) {
         val body = buildJsonObject {
             put("name", name)
             put("folder", buildJsonObject {})
-            put(CONFLICT_BEHAVIOR, "fail")
+            put(CONFLICT_BEHAVIOR, "replace")
         }.toString()
-        send { authorized(url("me", "drive", "items", parentId, "children"), it).post(body.toRequestBody(JSON_MEDIA)).build() }
-            .use { it.decode() }
+        val item = send {
+            authorized(url("me", "drive", "items", parentId, "children"), it).post(body.toRequestBody(JSON_MEDIA)).build()
+        }.use { it.decode<DriveItem>() }
+        if (item.folder == null) {
+            throw IllegalStateException("'$name' já existe no OneDrive como arquivo, não como pasta")
+        }
+        item
     }
 
     suspend fun move(itemId: String, newParentId: String, newName: String): DriveItem = withContext(Dispatchers.IO) {
@@ -223,12 +235,12 @@ class GraphClient(
             .use { it.decode() }
     }
 
-    private suspend fun send(create: (String) -> Request): Response {
+    private suspend fun send(client: OkHttpClient = http, create: (String) -> Request): Response {
         var forceRefresh = false
         var attempt = 0
         while (true) {
             currentCoroutineContext().ensureActive()
-            val response = http.newCall(create(tokenProvider(forceRefresh))).execute()
+            val response = client.newCall(create(tokenProvider(forceRefresh))).execute()
             if (response.code == 401 && !forceRefresh) {
                 log("HTTP 401: renovando token")
                 response.close()
@@ -334,3 +346,17 @@ private fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .readTimeout(60, TimeUnit.SECONDS)
     .writeTimeout(60, TimeUnit.SECONDS)
     .build()
+
+/**
+ * Transfer client for content: a large download or upload session chunk may take far longer than a
+ * metadata call, but the metadata client keeps its short 60s/5min window. `newBuilder()` reuses the
+ * base client (connect timeout, retry, proxy, dispatcher) so only these three values differ.
+ */
+internal fun transferClient(base: OkHttpClient): OkHttpClient = base.newBuilder()
+    .readTimeout(TRANSFER_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+    .writeTimeout(TRANSFER_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+    .callTimeout(TRANSFER_CALL_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+    .build()
+
+private const val TRANSFER_TIMEOUT_MINUTES = 5L
+private const val TRANSFER_CALL_TIMEOUT_MINUTES = 30L

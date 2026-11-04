@@ -9,6 +9,7 @@ import com.anderson.onedrivesync.db.DbIndexStore
 import com.anderson.onedrivesync.db.Pair
 import com.anderson.onedrivesync.graph.GraphClient
 import com.anderson.onedrivesync.graph.GraphRemoteApi
+import com.anderson.onedrivesync.graph.transferClient
 import com.anderson.onedrivesync.sync.FileLocalFs
 import com.anderson.onedrivesync.sync.IndexStore
 import com.anderson.onedrivesync.sync.LocalFs
@@ -45,6 +46,9 @@ class AppContainer(context: Context) {
             .build()
     }
 
+    /** Content transfers: same client, only read/write 5 min and call 30 min instead of 60s/5min. */
+    val transferHttpClient: OkHttpClient by lazy { transferClient(okHttpClient) }
+
     val authManager: AuthManager by lazy {
         AuthManager(
             clientId = { BuildConfig.DEFAULT_CLIENT_ID },
@@ -58,6 +62,7 @@ class AppContainer(context: Context) {
         GraphClient(
             tokenProvider = { forceRefresh -> authManager.accessToken(forceRefresh) },
             http = okHttpClient,
+            transferHttp = transferHttpClient,
             log = { message -> indexStore.log(System.currentTimeMillis(), "WARN", "Graph", message) },
         )
     }

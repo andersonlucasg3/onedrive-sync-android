@@ -93,7 +93,7 @@ Base `https://graph.microsoft.com/v1.0`. Token via `Authorization: Bearer`.
 | Subir pequeno (<4 MiB) | `PUT /me/drive/items/{id}/content` ou `PUT /me/drive/items/{parentId}:/{name}:/content` |
 | Subir grande | `POST /me/drive/items/{parentId}:/{name}:/createUploadSession` + `PUT` chunks 10 MiB (`Content-Range`) |
 | Mover/renomear | `PATCH /me/drive/items/{id}` body `{parentReference:{id:...}, name:"..."}` |
-| Criar pasta | `POST /me/drive/items/{parentId}/children` `{name, folder:{}, @microsoft.graph.conflictBehavior:"fail"}` |
+| Criar pasta | `POST /me/drive/items/{parentId}/children` `{name, folder:{}, @microsoft.graph.conflictBehavior:"replace"}`; um item devolvido que não tenha `folder` (arquivo) é erro claro |
 | Excluir | `DELETE /me/drive/items/{id}` |
 
 Campos que importam no delta: `id, name, size, parentReference{id,path}, folder,

@@ -133,6 +133,10 @@ object Planner {
             if (remote != null && remoteId != null && remote.id != remoteId) {
                 // Another item now owns this path; plan it as new, the indexed one is unreported.
                 when {
+                    remote.isDir && (localFile == null || localFile.isDir) ->
+                        actions += Action.CreateFolderLocal(relPath)
+                    isFolder(remote, localFile) ->
+                        conflicts += conflictRow(pairId, relPath, remote.id, remote, localFile, now)
                     localFile == null -> actions += Action.Download(relPath, remote.id, remote.size)
                     remote.size == localFile.size && localHash != null && localHash == remote.quickXorHash -> Unit
                     else -> conflicts += conflictRow(pairId, relPath, remote.id, remote, localFile, now)
@@ -149,8 +153,12 @@ object Planner {
             } else if (localFile == null) {
                 when {
                     remote == null && remoteId == null -> Unit
-                    remote != null && remoteChanged(entry, remote) ->
-                        actions += Action.Download(relPath, remote.id, remote.size)
+                    remote != null && remoteChanged(entry, remote) -> when {
+                        // The local folder is gone and the remote one was reported: recreate and index
+                        // it, never download a directory.
+                        remote.isDir -> actions += Action.CreateFolderLocal(relPath)
+                        else -> actions += Action.Download(relPath, remote.id, remote.size)
+                    }
                     else -> pending += pendingOp(
                         pairId,
                         PendingKind.DELETE_REMOTE,
@@ -174,7 +182,15 @@ object Planner {
                     remoteChangedFlag && localChangedFlag ->
                         if (localHash != null && localHash == remote.quickXorHash) Unit
                         else conflicts += conflictRow(pairId, relPath, remote.id, remote, localFile, now)
-                    remoteChangedFlag -> actions += Action.Download(relPath, remote.id, remote.size)
+                    remoteChangedFlag -> when {
+                        // Graph reports a folder's `size` as the total of its children, so a folder can
+                        // look "changed". It is still a folder: fix the index, or report a type clash.
+                        remote.isDir && localFile.isDir ->
+                            if (!entry.isDir) actions += Action.CreateFolderLocal(relPath)
+                        isFolder(remote, localFile) ->
+                            conflicts += conflictRow(pairId, relPath, remote.id, remote, localFile, now)
+                        else -> actions += Action.Download(relPath, remote.id, remote.size)
+                    }
                     localChangedFlag -> actions += Action.Upload(relPath, remoteParentOf(relPath, view))
                 }
             }
@@ -210,6 +226,13 @@ object Planner {
         if (remote.size != entry.size) return true
         return remote.quickXorHash != null && entry.remoteHash != null && remote.quickXorHash != entry.remoteHash
     }
+
+    /**
+     * A path is a folder when either side says so. A `Download` is only ever planned for a regular
+     * file: a folder has no content to stream, and Graph's folder `size` can differ from the index.
+     */
+    private fun isFolder(remote: RemoteItem?, localFile: LocalFile?): Boolean =
+        remote?.isDir == true || localFile?.isDir == true
 
     /** Local intact = same size, mtime and (when known) hash as the index. */
     private fun localChanged(entry: Entry, localFile: LocalFile, localHash: String?): Boolean {

@@ -5,7 +5,9 @@ import com.anderson.onedrivesync.graph.FileFacet
 import com.anderson.onedrivesync.graph.FileHashes
 import com.anderson.onedrivesync.graph.GraphException
 import java.io.File
+import java.io.IOException
 import java.util.Base64
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * In-memory OneDrive for tests: a tree of nodes plus a change log.
@@ -63,11 +65,20 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
     private var failDownloadId: String? = null
     private var corruptDownloadId: String? = null
     private var truncateDownloadId: String? = null
+    private var silentDownloadId: String? = null
     private var failCreateFolder = false
+    private var createFolderReturnsFile = false
+    private var failSetMtime = false
+    private var cancelSetMtime = false
 
     /** Makes the next [download] of [remoteId] fail with a transient error, as a timeout would. */
     fun failNextDownload(remoteId: String) {
         failDownloadId = remoteId
+    }
+
+    /** Makes the next [download] of [remoteId] fail with a blank message, as the field log showed. */
+    fun failNextDownloadWithoutMessage(remoteId: String) {
+        silentDownloadId = remoteId
     }
 
     /** Makes the next [download] of [remoteId] hand over wrong bytes of the same size. */
@@ -83,6 +94,21 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
     /** Makes the next [createFolder] answer 409, as when the folder was already created remotely. */
     fun failNextCreateFolder() {
         failCreateFolder = true
+    }
+
+    /** Makes the next [createFolder] answer a file, as a `replace` collision with a file can. */
+    fun nextCreateFolderReturnsFile() {
+        createFolderReturnsFile = true
+    }
+
+    /** Makes the next [setMtime] answer 409 `resourceModified`, as Graph does right after a write. */
+    fun failNextSetMtime() {
+        failSetMtime = true
+    }
+
+    /** Makes the next [setMtime] throw a cancellation, as a cancelled cycle would. */
+    fun cancelNextSetMtime() {
+        cancelSetMtime = true
     }
 
     init {
@@ -146,6 +172,10 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
             failDownloadId = null
             throw GraphException(status = 500, code = "generalException", message = "download failed")
         }
+        if (silentDownloadId == remoteId) {
+            silentDownloadId = null
+            throw IOException("")
+        }
         var bytes = node.bytes
         if (corruptDownloadId == remoteId) {
             corruptDownloadId = null
@@ -185,6 +215,19 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
         if (failCreateFolder) {
             failCreateFolder = false
             throw GraphException(status = 409, code = "nameAlreadyExists", message = "name already exists")
+        }
+        if (createFolderReturnsFile) {
+            createFolderReturnsFile = false
+            return RemoteItem(
+                id = "file-${++nextId}",
+                name = name,
+                parentId = parentRemoteId,
+                isDir = false,
+                size = 0,
+                mtimeMs = 0,
+                quickXorHash = null,
+                deleted = false,
+            )
         }
         val existing = nodes.values.firstOrNull { it.parentId == parentRemoteId && it.name == name && it.isDir }
         val node = existing ?: Node("r${++nextId}", parentRemoteId, name, true, ByteArray(0), 0)
@@ -232,6 +275,18 @@ class FakeRemoteApi(val rootId: String = ROOT) : RemoteApi {
 
     override suspend fun setMtime(remoteId: String, mtimeMs: Long) {
         calls += Call.SetMtime(remoteId, mtimeMs)
+        if (cancelSetMtime) {
+            cancelSetMtime = false
+            throw CancellationException("cycle cancelled")
+        }
+        if (failSetMtime) {
+            failSetMtime = false
+            throw GraphException(
+                status = 409,
+                code = "resourceModified",
+                message = "The resource has changed since the caller last read it",
+            )
+        }
         val node = requireNode(remoteId)
         node.mtimeMs = mtimeMs
         changes += node.toRemoteItem()

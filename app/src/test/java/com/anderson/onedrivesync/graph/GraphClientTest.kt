@@ -6,6 +6,7 @@ import com.anderson.onedrivesync.auth.FakeTokenStore
 import com.anderson.onedrivesync.auth.Tokens
 import java.io.File
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -439,6 +440,90 @@ class GraphClientTest {
         assertEquals("Bearer fresh", meRequest.headers["Authorization"])
         assertEquals("fresh", store.tokens?.accessToken)
         assertEquals("refresh-2", store.tokens?.refreshToken)
+    }
+
+    @Test
+    fun `download and uploads use the transfer client`() = runBlocking {
+        val transfer = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                chain.proceed(chain.request().newBuilder().header("X-Transfer", "1").build())
+            }
+            .build()
+        val tagged = GraphClient(
+            tokenProvider = { "token-1" },
+            graphBaseUrl = server.url("/v1.0").toString(),
+            http = OkHttpClient(),
+            transferHttp = transfer,
+        )
+        val uploadUrl = server.url("/upload-session").toString()
+        val dest = File.createTempFile("odsync", ".part").also { it.deleteOnExit() }
+        val file = File.createTempFile("odsync", ".bin").apply { writeText("conteudo") }
+        file.deleteOnExit()
+
+        server.enqueue(json("""{"displayName":"Ana"}"""))
+        tagged.me()
+        assertNull(server.takeRequest().headers["X-Transfer"])
+
+        server.enqueue(MockResponse().setResponseCode(200).setBody("hello"))
+        tagged.download("A!1", dest) { _, _ -> }
+        assertEquals("1", server.takeRequest().headers["X-Transfer"])
+
+        server.enqueue(json("""{"id":"F!1","name":"small.txt","file":{}}"""))
+        tagged.uploadSmall("P!1", "small.txt", file)
+        assertEquals("1", server.takeRequest().headers["X-Transfer"])
+
+        server.enqueue(json("""{"uploadUrl":"$uploadUrl"}"""))
+        server.enqueue(json("""{"id":"F!2","name":"big.bin","file":{}}"""))
+        tagged.uploadLarge("P!1", "big.bin", file) { _, _ -> }
+        assertEquals("1", server.takeRequest().headers["X-Transfer"]) // createUploadSession
+        assertEquals("1", server.takeRequest().headers["X-Transfer"]) // chunk
+    }
+
+    @Test
+    fun `the transfer client keeps the base configuration and raises only its timeouts`() {
+        val base = OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .callTimeout(5, TimeUnit.MINUTES)
+            .build()
+
+        val transfer = transferClient(base)
+
+        assertEquals(30_000, transfer.connectTimeoutMillis)
+        assertEquals(300_000, transfer.readTimeoutMillis)
+        assertEquals(300_000, transfer.writeTimeoutMillis)
+        assertEquals(1_800_000, transfer.callTimeoutMillis)
+        // Metadata keeps the short window: only the derived client changed.
+        assertEquals(60_000, base.readTimeoutMillis)
+        assertEquals(300_000, base.callTimeoutMillis)
+    }
+
+    @Test
+    fun `create folder asks Graph to replace an existing name and adopts the folder`() = runBlocking {
+        server.enqueue(json("""{"id":"F!9","name":"Docs","folder":{"childCount":0}}"""))
+
+        val item = client.createFolder("P!1", "Docs")
+
+        assertEquals("F!9", item.id)
+        assertEquals(0L, item.folder?.childCount ?: -1L)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals(listOf("v1.0", "me", "drive", "items", "P!1", "children"), request.requestUrl?.pathSegments)
+        val body = request.body.readUtf8()
+        assertTrue(body.contains(""""@microsoft.graph.conflictBehavior":"replace""""))
+        assertTrue(body.contains(""""folder":{}"""))
+    }
+
+    @Test
+    fun `create folder whose replace answers a file throws a clear error`() {
+        server.enqueue(json("""{"id":"F!1","name":"Docs","file":{"mimeType":"text/plain"}}"""))
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            runBlocking { client.createFolder("P!1", "Docs") }
+        }
+
+        assertTrue(error.message.orEmpty().contains("arquivo, não como pasta"))
     }
 
     private fun json(body: String, status: Int = 200): MockResponse =

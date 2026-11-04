@@ -78,6 +78,50 @@ class SyncEngineTest {
     }
 
     @Test
+    fun `an upload whose mtime patch is refused is indexed and not uploaded again`() {
+        File(root, "novo.txt").writeText("olá")
+        remote.failNextSetMtime()
+
+        runSync()
+
+        val entry = store.entriesOf(PAIR).single { it.relPath == "novo.txt" }
+        assertEquals(EntryState.SYNCED, entry.state)
+        assertEquals(File(root, "novo.txt").lastModified(), entry.mtimeMs)
+        assertEquals("olá", remote.textOf("novo.txt"))
+        assertNotNull(store.stateOf(SyncEngine.deltaKey(PAIR)))
+        assertTrue(
+            store.logs.any { it.startsWith("WARN Executor: mtime não aplicado em novo.txt:") },
+        )
+        assertFalse(store.logs.any { it.contains("enviar novo.txt falhou") })
+
+        remote.clearCalls()
+        runSync()
+
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Upload })
+    }
+
+    @Test
+    fun `a cancellation during the mtime patch is not swallowed`() = runBlocking {
+        File(root, "novo.txt").writeText("olá")
+        remote.cancelNextSetMtime()
+
+        val job = launch { engine.syncPair(PAIR) }
+        job.join()
+
+        assertTrue(job.isCancelled)
+    }
+
+    @Test
+    fun `a failure with a blank message is logged with the exception type`() {
+        remote.addFile("a.txt", "conteudo")
+        remote.failNextDownloadWithoutMessage(remote.idOf("a.txt"))
+
+        runSync()
+
+        assertTrue(store.logs.any { it.contains("baixar a.txt falhou: IOException") })
+    }
+
+    @Test
     fun `remote rename moves the local file without downloading`() {
         remote.addFile("a.txt", "conteudo")
         runSync()
@@ -680,6 +724,51 @@ class SyncEngineTest {
         assertEquals(0, stats.failed)
         assertEquals(1, stats.done)
         assertEquals(folderId, store.entriesOf(PAIR).single { it.relPath == "Docs" }.remoteId)
+    }
+
+    @Test
+    fun `a create folder that replaces an existing folder adopts it and the upload proceeds`() {
+        val folderId = remote.addFolder("Docs")
+        File(root, "Docs").mkdirs()
+        File(root, "Docs/a.txt").writeText("conteudo")
+        val plan = Plan(
+            listOf(Action.CreateFolderRemote("Docs"), Action.Upload("Docs/a.txt", "Docs")),
+            emptyList(),
+            emptyList(),
+        )
+        remote.clearCalls()
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(0, stats.failed)
+        assertEquals(2, stats.done)
+        assertEquals(folderId, remote.calls.filterIsInstance<FakeRemoteApi.Call.Upload>().single().parentId)
+        assertEquals(folderId, store.entriesOf(PAIR).single { it.relPath == "Docs" }.remoteId)
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.ResolveChild })
+        assertEquals("conteudo", remote.textOf("Docs/a.txt"))
+        assertFalse(store.logs.any { it.contains("falhou") })
+    }
+
+    @Test
+    fun `a create folder whose replace answers a file fails with a clear message`() {
+        remote.nextCreateFolderReturnsFile()
+        val plan = Plan(listOf(Action.CreateFolderRemote("Docs")), emptyList(), emptyList())
+        remote.clearCalls()
+
+        val stats = runBlocking {
+            executor().execute(plan, pair(), PairView(emptyMap(), emptySet())) { _, _, _ -> }
+        }
+
+        assertEquals(1, stats.failed)
+        assertEquals(0, stats.done)
+        assertTrue(store.entriesOf(PAIR).isEmpty())
+        assertTrue(
+            store.logs.any {
+                it.contains("criar pasta remota Docs falhou") && it.contains("arquivo, não como pasta")
+            },
+        )
     }
 
     @Test

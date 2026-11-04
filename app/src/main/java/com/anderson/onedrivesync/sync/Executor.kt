@@ -4,6 +4,7 @@ import com.anderson.onedrivesync.db.Entry
 import com.anderson.onedrivesync.db.EntryState
 import com.anderson.onedrivesync.db.Pair
 import com.anderson.onedrivesync.graph.GraphException
+import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
@@ -78,7 +79,8 @@ class Executor(
             } catch (e: Exception) {
                 if (e is GraphException && e.isFatal()) throw e
                 failed++
-                log("${label(action)} falhou: ${e.message}")
+                // Never leave the log with an empty tail: some exceptions carry no message at all.
+                log("${label(action)} falhou: ${e.failureMessage()}")
             }
             onProgress(label(action), done + failed, actions.size)
         }
@@ -140,11 +142,12 @@ class Executor(
                     null
                 }
                 if (existing == null) {
-                    log("criar pasta remota '$current' falhou: ${e.message}")
+                    log("criar pasta remota '$current' falhou: ${e.failureMessage()}")
                     return null
                 }
                 existing
             }
+            requireFolder(item, current)
             remoteIds[current] = item.id
             store.upsertEntry(folderEntry(pair, current, item.id))
         }
@@ -162,9 +165,9 @@ class Executor(
         val item = try {
             remote.createFolder(parentId, nameOf(action.relPath))
         } catch (e: GraphException) {
-            // A crash between the POST and the index write leaves the folder created; "fail" then
-            // answers 409 on every cycle. Adopt the one the view already reports, or resolve it by
-            // path when the delta did not report it.
+            // A crash between the POST and the index write leaves the folder created. `replace` should
+            // answer the existing item, but a server that ignores the preference still sends 409:
+            // adopt the one the view already reports, or resolve it by path when the delta missed it.
             val existing = if (e.isAlreadyExists()) {
                 view.items[action.relPath] ?: resolveExistingFolder(action.relPath, parentId)
             } else {
@@ -172,6 +175,7 @@ class Executor(
             }
             existing ?: throw e
         }
+        requireFolder(item, action.relPath)
         remoteIds[action.relPath] = item.id
         store.upsertEntry(folderEntry(pair, action.relPath, item.id))
     }
@@ -185,6 +189,16 @@ class Executor(
         val existing = remote.resolveChild(parentId, nameOf(relPath)) ?: return null
         store.log(clock(), "INFO", TAG, "pasta remota '$relPath' já existia (id via caminho)")
         return existing
+    }
+
+    /**
+     * `replace` (and the 409 fallback) can answer with a file that owns the folder name; indexing it
+     * as a folder would point every child upload at a file.
+     */
+    private fun requireFolder(item: RemoteItem, relPath: String) {
+        if (!item.isDir) {
+            throw IllegalStateException("'$relPath' já existe no OneDrive como arquivo, não como pasta")
+        }
     }
 
     private fun createFolderLocal(action: Action.CreateFolderLocal, pair: Pair, remoteIds: Map<String, String>) {
@@ -298,7 +312,7 @@ class Executor(
         val file = local.file(relPath)
         val item = remote.upload(parentId, nameOf(relPath), file) { _, _ -> }
         val mtime = file.lastModified()
-        remote.setMtime(item.id, mtime)
+        applyMtime(item.id, relPath, mtime)
         store.upsertEntry(
             Entry(
                 id = 0,
@@ -317,6 +331,24 @@ class Executor(
                 state = EntryState.SYNCED,
             ),
         )
+    }
+
+    /**
+     * Best-effort mtime: the upload already landed, so a refused PATCH must not fail the action.
+     * Graph answers 409 `resourceModified` right after the write; failing here would skip the index
+     * entry and re-upload the same file on every cycle. Cancellation is never swallowed.
+     */
+    private suspend fun applyMtime(remoteId: String, relPath: String, mtimeMs: Long) {
+        try {
+            remote.setMtime(remoteId, mtimeMs)
+        } catch (e: Exception) {
+            when (e) {
+                is CancellationException -> throw e
+                is GraphException, is IOException ->
+                    log("mtime não aplicado em $relPath: ${e.failureMessage()}")
+                else -> throw e
+            }
+        }
     }
 
     /** Indexes a remote file whose bytes already match the local copy; nothing is transferred. */
@@ -407,6 +439,10 @@ class Executor(
 private fun parentOf(relPath: String): String = relPath.substringBeforeLast('/', "")
 
 private fun nameOf(relPath: String): String = relPath.substringAfterLast('/')
+
+/** A failure message that is never blank: some exceptions (raw I/O, checks) carry none. */
+private fun Throwable.failureMessage(): String =
+    message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName ?: javaClass.name
 
 private fun GraphException.isFatal(): Boolean = status == 401 || status == 403 || status == 410
 

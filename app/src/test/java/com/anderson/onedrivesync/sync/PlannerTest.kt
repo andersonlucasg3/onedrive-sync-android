@@ -174,6 +174,65 @@ class PlannerTest {
     }
 
     @Test
+    fun `a remote folder without a file facet and no previous entry becomes a local folder`() {
+        val plan = plan(
+            view = viewOf(remote("f1", "Aniversário Bernardo", isDir = true, size = 42)),
+        )
+
+        assertEquals(listOf<Action>(Action.CreateFolderLocal("Aniversário Bernardo")), plan.actions)
+        assertTrue(plan.actions.none { it is Action.Download })
+    }
+
+    @Test
+    fun `a remote folder reported with a new size and no local copy is created instead of downloaded`() {
+        // Graph reports a folder's size as the total of its children: the indexed size (0) always
+        // differs, which used to plan `Download` for a directory.
+        val plan = plan(
+            prev = listOf(entry("Aniversário Bernardo", "f1", isDir = true)),
+            view = viewOf(remote("f1", "Aniversário Bernardo", isDir = true, size = 4_096)),
+        )
+
+        assertEquals(listOf<Action>(Action.CreateFolderLocal("Aniversário Bernardo")), plan.actions)
+    }
+
+    @Test
+    fun `a remote folder that changed size with the local folder present is not downloaded`() {
+        val plan = plan(
+            prev = listOf(entry("Aniversário Bernardo", "f1", isDir = true)),
+            view = viewOf(remote("f1", "Aniversário Bernardo", isDir = true, size = 4_096)),
+            local = listOf(local("Aniversário Bernardo", isDir = true)),
+        )
+
+        assertTrue(plan.actions.isEmpty())
+        assertTrue(plan.pending.isEmpty())
+        assertTrue(plan.conflicts.isEmpty())
+    }
+
+    @Test
+    fun `a remote folder with a new id and no local copy is created instead of downloaded`() {
+        val plan = plan(
+            prev = listOf(entry("Fotos", "f1", isDir = true)),
+            view = viewOf(remote("f2", "Fotos", isDir = true)),
+        )
+
+        assertEquals(listOf<Action>(Action.CreateFolderLocal("Fotos")), plan.actions)
+        assertTrue(plan.actions.none { it is Action.Download })
+    }
+
+    @Test
+    fun `a remote folder replacing a local file is a conflict and never a download`() {
+        val plan = plan(
+            prev = listOf(entry("Fotos", "r1", size = 5, mtimeMs = 100, localHash = HASH_A, remoteHash = HASH_A)),
+            view = viewOf(remote("r1", "Fotos", isDir = true, size = 4_096)),
+            local = listOf(local("Fotos", size = 5, mtimeMs = 100)),
+            hashes = mapOf("Fotos" to HASH_A),
+        )
+
+        assertEquals("Fotos", plan.conflicts.single().relPath)
+        assertTrue(plan.actions.none { it is Action.Download })
+    }
+
+    @Test
     fun `creates a remote folder for a new local folder`() {
         val plan = plan(local = listOf(local("Fotos", isDir = true)))
 
