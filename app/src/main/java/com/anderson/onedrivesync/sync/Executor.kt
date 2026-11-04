@@ -34,6 +34,8 @@ class Executor(
     private val local: LocalFs,
     private val store: IndexStore,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Hashes the planner already computed this cycle; reused instead of reading the file twice. */
+    private val knownHashes: Map<String, String> = emptyMap(),
 ) {
     suspend fun execute(
         plan: Plan,
@@ -277,6 +279,19 @@ class Executor(
         remoteIds: MutableMap<String, String>,
     ) {
         val relPath = action.relPath
+        // A stale or partial view can hide a remote item the plan thinks is new. Never replace
+        // identical bytes: index what is already there. Different bytes keep the plan's decision,
+        // but leave a trail because the remote copy is being overwritten.
+        val existing = view.items[relPath]?.takeIf { !it.isDir }
+        val localHash = if (existing != null) knownHashes[relPath] ?: local.hash(relPath) else null
+        if (existing != null && localHash != null) {
+            val remoteHash = existing.quickXorHash
+            if (remoteHash == localHash) {
+                indexRemoteCopy(pair, relPath, existing, localHash)
+                return
+            }
+            if (remoteHash != null) log("substituindo remoto existente '$relPath' (hash diferente)")
+        }
         val parentRel = action.remoteParentRel ?: parentOf(relPath)
         val parentId = ensureRemoteFolder(parentRel, ::parentOf, remoteIds, pair, view)
             ?: throw IllegalStateException("pasta remota desconhecida: '$parentRel'")
@@ -294,10 +309,33 @@ class Executor(
                 isDir = false,
                 size = file.length(),
                 mtimeMs = mtime,
-                localHash = local.hash(relPath),
+                localHash = localHash ?: local.hash(relPath),
                 remoteId = item.id,
                 remoteEtag = null,
                 remoteHash = item.quickXorHash ?: remote.getItem(item.id).quickXorHash,
+                syncedAt = clock(),
+                state = EntryState.SYNCED,
+            ),
+        )
+    }
+
+    /** Indexes a remote file whose bytes already match the local copy; nothing is transferred. */
+    private fun indexRemoteCopy(pair: Pair, relPath: String, item: RemoteItem, localHash: String) {
+        val file = local.file(relPath)
+        store.upsertEntry(
+            Entry(
+                id = 0,
+                pairId = pair.id,
+                relPath = relPath,
+                parentRel = parentOf(relPath).ifEmpty { null },
+                name = nameOf(relPath),
+                isDir = false,
+                size = file.length(),
+                mtimeMs = file.lastModified(),
+                localHash = localHash,
+                remoteId = item.id,
+                remoteEtag = null,
+                remoteHash = item.quickXorHash,
                 syncedAt = clock(),
                 state = EntryState.SYNCED,
             ),

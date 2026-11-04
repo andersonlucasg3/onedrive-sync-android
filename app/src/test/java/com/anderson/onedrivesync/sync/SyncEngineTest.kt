@@ -1018,6 +1018,94 @@ class SyncEngineTest {
         assertEquals(1, counting.hashesBeforeFirstUpload)
     }
 
+    @Test
+    fun `an empty incremental view with a saved cursor is reenumerated before an upload`() {
+        remote.addFile("a.txt", "conteudo")
+        File(root, "a.txt").writeText("conteudo")
+        // A cursor past the change log replays nothing: the drive has a.txt, the view does not.
+        store.setState(SyncEngine.deltaKey(PAIR), "c:99")
+
+        runSync()
+
+        assertEquals(listOf<String?>("c:99", null), remote.deltaCursors())
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Upload })
+        assertEquals("conteudo", remote.textOf("a.txt"))
+        assertTrue(
+            store.logs.contains(
+                "WARN SyncEngine: visão remota vazia com cursor salvo em 'Teste': reenumerando do zero",
+            ),
+        )
+        assertTrue(store.logs.any { it.startsWith("INFO SyncEngine: plano:") && it.endsWith("(remoto: 1 itens)") })
+    }
+
+    @Test
+    fun `an empty view whose remote is really empty is confirmed and the upload proceeds`() {
+        File(root, "novo.txt").writeText("olá")
+        store.setState(SyncEngine.deltaKey(PAIR), "c:0")
+
+        runSync()
+
+        assertEquals(listOf<String?>("c:0", null), remote.deltaCursors())
+        assertEquals(1, remote.calls.count { it is FakeRemoteApi.Call.Upload })
+        assertEquals("olá", remote.textOf("novo.txt"))
+        assertTrue(
+            store.logs.contains(
+                "INFO SyncEngine: remoto vazio confirmado para 'Teste' " +
+                    "(1 arquivos locais serão enviados)",
+            ),
+        )
+    }
+
+    @Test
+    fun `a first cycle without a cursor enumerates only once`() {
+        File(root, "novo.txt").writeText("olá")
+
+        runSync()
+
+        assertEquals(listOf<String?>(null), remote.deltaCursors())
+        assertEquals(1, remote.calls.count { it is FakeRemoteApi.Call.Upload })
+        assertFalse(store.logs.any { it.contains("visão remota vazia") })
+    }
+
+    @Test
+    fun `an upload over an existing remote with the same hash only indexes`() {
+        val remoteId = remote.addFile("a.txt", "conteudo")
+        File(root, "a.txt").writeText("conteudo")
+        val item = runBlocking { remote.getItem(remoteId) }
+        remote.clearCalls()
+        val view = PairView(items = mapOf("a.txt" to item), deletedIds = emptySet())
+        val plan = Plan(listOf(Action.Upload("a.txt", null)), emptyList(), emptyList())
+
+        val stats = runBlocking { executor().execute(plan, pair(), view) { _, _, _ -> } }
+
+        assertEquals(0, stats.failed)
+        assertEquals(0, remote.calls.count { it is FakeRemoteApi.Call.Upload })
+        val entry = store.entriesOf(PAIR).single { it.relPath == "a.txt" }
+        assertEquals(remoteId, entry.remoteId)
+        assertEquals(fs.hash("a.txt"), entry.localHash)
+        assertEquals(item.quickXorHash, entry.remoteHash)
+        assertEquals(EntryState.SYNCED, entry.state)
+    }
+
+    @Test
+    fun `an upload over an existing remote with a different hash replaces it and warns`() {
+        val remoteId = remote.addFile("a.txt", "remoto")
+        File(root, "a.txt").writeText("local!")
+        val item = runBlocking { remote.getItem(remoteId) }
+        remote.clearCalls()
+        val view = PairView(items = mapOf("a.txt" to item), deletedIds = emptySet())
+        val plan = Plan(listOf(Action.Upload("a.txt", null)), emptyList(), emptyList())
+
+        val stats = runBlocking { executor().execute(plan, pair(), view) { _, _, _ -> } }
+
+        assertEquals(0, stats.failed)
+        assertEquals(1, remote.calls.count { it is FakeRemoteApi.Call.Upload })
+        assertEquals("local!", remote.textOf("a.txt"))
+        assertTrue(
+            store.logs.contains("WARN Executor: substituindo remoto existente 'a.txt' (hash diferente)"),
+        )
+    }
+
     /** Two pairs over two distinct remote folders and local directories. */
     private class TwoPairs(
         val remote: FakeRemoteApi,
@@ -1044,7 +1132,7 @@ class SyncEngineTest {
     private fun engineFor(store: FakeIndexStore, remote: FakeRemoteApi): SyncEngine =
         SyncEngine(store, remote, { pair -> FileLocalFs(File(pair.localPath)) }, { NOW })
 
-    private fun executor(): Executor = Executor(remote, fs, store) { NOW }
+    private fun executor(): Executor = Executor(remote, fs, store, { NOW })
 
     private fun pairOf(id: Long, remoteId: String, localDir: File): Pair = Pair(
         id = id,

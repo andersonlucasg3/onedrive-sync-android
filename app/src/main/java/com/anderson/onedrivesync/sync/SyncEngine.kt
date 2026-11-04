@@ -210,14 +210,33 @@ class SyncEngine(
             val prev = store.entries(pair.id).filterNot { isHiddenRelPath(it.relPath) }
 
             _state.value = SyncState.Running(name, "lendo OneDrive", 0, 0, phase = DELTA_PHASE, phases = PHASES)
-            val delta = pairDelta(pair)
+            var delta = pairDelta(pair)
 
             _state.value = SyncState.Running(name, "lendo pastas locais", 0, 0, phase = SCAN_PHASE, phases = PHASES)
             val scanStart = clock()
             val localFiles = fs.scan()
             logInfo("scan local: ${localFiles.size} entradas em ${clock() - scanStart} ms")
 
-            val view = RemoteTree.resolve(pair.remoteId, prev, delta.items)
+            var view = RemoteTree.resolve(pair.remoteId, prev, delta.items)
+            // A saved cursor only reports what changed, so an empty view is also the normal result
+            // of a quiet cycle; the risk is a cursor that broke and hides the whole drive. Only an
+            // upload can replace remote content, so only a cycle with an upload to send pays the
+            // full re-enumeration. A tombstone proves the delta answered: leave the deletion path
+            // untouched.
+            if (delta.incremental && view.items.isEmpty() && view.deletedIds.isEmpty() &&
+                localFiles.any { !it.isDir } && wouldUpload(pair, prev, view, localFiles)
+            ) {
+                log("visão remota vazia com cursor salvo em '$name': reenumerando do zero")
+                store.setState(deltaKey(pair.id), null)
+                delta = fullDelta(pair)
+                view = RemoteTree.resolve(pair.remoteId, prev, delta.items)
+                if (view.items.isEmpty()) {
+                    logInfo(
+                        "remoto vazio confirmado para '$name' " +
+                            "(${localFiles.count { !it.isDir }} arquivos locais serão enviados)",
+                    )
+                }
+            }
 
             val hashStart = clock()
             val toHash = filesToHash(prev, localFiles, view)
@@ -243,10 +262,11 @@ class SyncEngine(
                 "plano: ${plan.actions.count { it is Action.Download }} downloads, " +
                     "${plan.actions.count { it is Action.Upload }} uploads, " +
                     "${plan.actions.count { it is Action.MoveLocal || it is Action.MoveRemote }} moves, " +
-                    "${pending.size} pendências, ${plan.conflicts.size} conflitos em ${clock() - planStart} ms",
+                    "${pending.size} pendências, ${plan.conflicts.size} conflitos em ${clock() - planStart} ms " +
+                    "(remoto: ${view.items.size} itens)",
             )
 
-            val stats = Executor(remote, fs, store, clock).execute(plan, pair, view) { step, done, total ->
+            val stats = Executor(remote, fs, store, clock, hashes).execute(plan, pair, view) { step, done, total ->
                 _state.value = SyncState.Running(name, step, done, total, phase = EXEC_PHASE, phases = PHASES)
             }
             exec = stats
@@ -299,6 +319,21 @@ class SyncEngine(
             }
         }
     }
+
+    /**
+     * Whether the empty view would make the planner send at least one local file up. Downloads
+     * cannot be planned without a remote item and deletions wait for approval, so only an upload
+     * can overwrite remote content; a quiet cycle with nothing to send needs no re-enumeration.
+     * No hashes are needed for the probe: with no remote item, every upload the planner can emit
+     * comes from a missing entry, a missing remote id, or a size/mtime change.
+     */
+    private fun wouldUpload(
+        pair: Pair,
+        prev: List<Entry>,
+        view: PairView,
+        localFiles: List<LocalFile>,
+    ): Boolean = Planner.plan(pair.id, prev, view, localFiles, emptyMap(), clock())
+        .actions.any { it is Action.Upload }
 
     /**
      * Only files whose content can still change the decision are hashed:
@@ -377,6 +412,14 @@ class SyncEngine(
         }
     }
 
+    /** Full enumeration of the scope the pair already uses; the cursor is neither read nor kept. */
+    private suspend fun fullDelta(pair: Pair): DeltaFetch =
+        if (store.getState(deltaRootKey(pair.id)) != null) {
+            deltaFor(pair, rootId = null, cursor = null)
+        } else {
+            deltaFor(pair, rootId = pair.remoteId, cursor = null)
+        }
+
     private suspend fun deltaFor(pair: Pair, rootId: String?, cursor: String?): DeltaFetch {
         val started = clock()
         val page = try {
@@ -390,12 +433,12 @@ class SyncEngine(
             store.setState(deltaKey(pair.id), null)
             val fresh = pages(rootId, null, pair.displayName)
             logDelta(pair, rootId, fresh, started)
-            return DeltaFetch(fresh.items, fresh.deltaLink, resync = true, pages = fresh.pages)
+            return DeltaFetch(fresh.items, fresh.deltaLink, resync = true, pages = fresh.pages, incremental = false)
         }
         logDelta(pair, rootId, page, started)
         // A full enumeration is legitimate, not a 410 resync: tombstones that do arrive must still
         // produce DELETE_* pending ops, so resync stays false on this path.
-        return DeltaFetch(page.items, page.deltaLink, resync = false, pages = page.pages)
+        return DeltaFetch(page.items, page.deltaLink, resync = false, pages = page.pages, incremental = cursor != null)
     }
 
     private fun logDelta(pair: Pair, rootId: String?, page: Page, started: Long) {
@@ -567,6 +610,8 @@ class SyncEngine(
         val deltaLink: String?,
         val resync: Boolean,
         val pages: Int = 1,
+        /** True when the returned window came from a saved cursor, i.e. only changes were reported. */
+        val incremental: Boolean = false,
     )
 
     private class Page(
